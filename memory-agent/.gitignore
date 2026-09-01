@@ -33,3 +33,16 @@ htmlcov/
 test-vault/
 *test_vault*/
 *.log
+
+# Specialist agent artifacts / test outputs
+specialist-agent/specialist_agent/__pycache__/
+specialist-agent/specialist_agent/**/__pycache__/
+specialist-agent/tests/__pycache__/
+specialist-agent/.pytest_cache/
+
+# No model weight files
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
