@@ -43,7 +43,7 @@ CAPABILITY_KEYWORDS: dict[str, list[str]] = {
         "third-party", "third party", "external api", "stripe",
         "twilio", "sendgrid", "oauth", "webhook", "sdk", "client library",
         "integrate with", "connect to", "api key", "api client",
-        "payment gateway", "google api", "github api",
+        "payment gateway", "payment api", "google api", "github api",
     ],
     # Authentication
     "authentication": [
