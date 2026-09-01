@@ -382,15 +382,16 @@ class _LocalInvertedIndex:
                         continue
 
             # Check query token coverage across the document
+            content_tokens = [t for t in q_tokens if t not in _STOPWORDS] or q_tokens
             doc_all_tokens = note.title_tokens | set(note.tag_lowers)
             tf_map = self.term_freqs[doc_id]
-            matched_q_tokens = sum(1 for t in q_tokens if t in doc_all_tokens or tf_map.get(t, 0) > 0)
-            token_coverage = matched_q_tokens / len(q_tokens)
+            matched_q_tokens = sum(1 for t in content_tokens if t in doc_all_tokens or tf_map.get(t, 0) > 0)
+            token_coverage = matched_q_tokens / len(content_tokens)
 
-            q_token_set = set(q_tokens)
+            q_token_set = set(content_tokens)
             is_title_match = (q_lower == note.title_lower) or (q_lower in note.title_lower) or (note.title_tokens and note.title_tokens.issubset(q_token_set))
             has_phrase_match = (q_lower in note.title_lower) or (q_lower in note.body_lower)
-            if len(q_tokens) >= 2 and not has_phrase_match and not is_title_match and token_coverage < 0.5:
+            if len(content_tokens) >= 2 and not has_phrase_match and not is_title_match and token_coverage < 0.5:
                 continue
 
             score = 0.0

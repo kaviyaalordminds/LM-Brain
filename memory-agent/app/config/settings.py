@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # ── Research Provider ──────────────────────────────────────────────────
     research_provider: str = Field(
         default="mock",
-        description="Provider type: 'mock' or 'web'",
+        description="Provider type: 'mock' or 'jina'",
     )
     # Never log this value.
     research_api_key: str = Field(

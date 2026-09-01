@@ -24,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.adapters.obsidian_adapter import LocalObsidianAdapter, MockObsidianAdapter, ObsidianAdapter
-from app.adapters.research_provider import MockResearchProvider, ResearchProvider
+from app.adapters.research_provider import JinaResearchProvider, MockResearchProvider, ResearchProvider
 from app.api.routes.memory import router as memory_router
 from app.config.settings import get_settings
 from app.core.memory_agent import MemoryAgent
@@ -75,20 +75,28 @@ def build_research_provider() -> ResearchProvider:
     """
     Return the correct ResearchProvider based on configuration.
 
-    # INTEGRATION POINT
-    When settings.research_provider == "web", instantiate and return
-    your real provider here, reading settings.research_api_key.
-    Never log the API key.
+    Supports:
+      - 'mock': MockResearchProvider (in-memory test provider)
+      - 'jina' / 'web': JinaResearchProvider (real external web & reader research)
     """
-    if settings.research_provider == "web":
-        # TODO: Replace with real web research provider.
-        # from app.adapters.web_research import WebResearchProvider
-        # return WebResearchProvider(api_key=settings.research_api_key, ...)
-        raise NotImplementedError(
-            "Web research provider not yet implemented. "
-            "Set RESEARCH_PROVIDER=mock to use the development provider."
+    provider_mode = settings.research_provider.lower().strip()
+    if provider_mode in ("jina", "web"):
+        if not settings.research_api_key or not settings.research_api_key.strip():
+            raise ValueError(
+                "RESEARCH_API_KEY is required when RESEARCH_PROVIDER=jina. "
+                "Please configure RESEARCH_API_KEY in .env or environment variables."
+            )
+        return JinaResearchProvider(
+            api_key=settings.research_api_key,
+            timeout_seconds=float(settings.research_timeout_seconds),
         )
-    return MockResearchProvider()
+    elif provider_mode == "mock":
+        return MockResearchProvider()
+    else:
+        raise ValueError(
+            f"Unsupported RESEARCH_PROVIDER='{settings.research_provider}'. "
+            f"Supported options are: 'mock', 'jina'."
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

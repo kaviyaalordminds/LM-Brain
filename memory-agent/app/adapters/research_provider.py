@@ -226,3 +226,207 @@ class MockResearchProvider(ResearchProvider):
             relevance=0.6,
             approval_status=ApprovalStatus.UNVERIFIED,
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Jina Research Provider (Real External Web & Reader Search)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class JinaResearchProvider(ResearchProvider):
+    """
+    Production Research Provider using Jina Search and Jina Reader.
+
+    - Uses https://s.jina.ai/<query> for live technical web research.
+    - Uses https://r.jina.ai/<url> for deep content extraction when needed.
+    - Preserves exact source URLs, titles, snippets, and domains.
+    - Enforces ApprovalStatus.UNVERIFIED on all returned items.
+    - Never logs or exposes the API key.
+    - Handles timeouts and error status codes gracefully.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        search_endpoint: str = "https://s.jina.ai",
+        reader_endpoint: str = "https://r.jina.ai",
+        timeout_seconds: float = 30.0,
+        max_results: int = 5,
+    ) -> None:
+        if not api_key or not api_key.strip():
+            raise ResearchProviderError(
+                "JinaResearchProvider requires a non-empty API key. "
+                "Set RESEARCH_API_KEY in .env or configure settings."
+            )
+        self._api_key = api_key.strip()
+        self._search_endpoint = search_endpoint.rstrip("/")
+        self._reader_endpoint = reader_endpoint.rstrip("/")
+        self._timeout_seconds = timeout_seconds
+        self._max_results = max_results
+
+    def _get_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self._api_key}",
+            "Accept": "application/json",
+            "X-Retain-Images": "none",
+        }
+
+    async def search(self, query: str) -> list[EvidenceItem]:
+        """
+        Search Jina for external technical evidence.
+
+        All returned EvidenceItems have approval_status = ApprovalStatus.UNVERIFIED.
+        """
+        q_clean = query.strip()
+        if not q_clean:
+            return []
+
+        import httpx
+        import urllib.parse
+        import logging
+        logger = logging.getLogger(__name__)
+
+        url = f"{self._search_endpoint}/{urllib.parse.quote(q_clean)}"
+        headers = self._get_headers()
+
+        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+            try:
+                response = await client.get(url, headers=headers)
+            except httpx.TimeoutException as exc:
+                raise ResearchTimeoutError(
+                    f"Jina search timed out after {self._timeout_seconds}s"
+                ) from exc
+            except httpx.RequestError as exc:
+                raise ResearchProviderError(
+                    f"Jina network connection failed: {exc}"
+                ) from exc
+
+        if response.status_code in (401, 403):
+            raise ResearchProviderError(
+                f"Jina authentication failed (HTTP {response.status_code}). Check RESEARCH_API_KEY."
+            )
+        if response.status_code == 429:
+            raise ResearchProviderError("Jina rate limit exceeded (HTTP 429).")
+        if response.status_code >= 500:
+            raise ResearchProviderError(
+                f"Jina search server error (HTTP {response.status_code})."
+            )
+        if response.status_code != 200:
+            raise ResearchProviderError(
+                f"Jina search failed with unexpected status HTTP {response.status_code}."
+            )
+
+        try:
+            data = response.json()
+        except Exception as exc:
+            raise InvalidResearchResultError(
+                f"Failed to parse Jina search response as JSON: {exc}"
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise InvalidResearchResultError("Jina search response is not a valid JSON object.")
+
+        raw_results = data.get("data", [])
+        if not isinstance(raw_results, list):
+            return []
+
+        items: list[EvidenceItem] = []
+        for raw in raw_results[: self._max_results]:
+            if not isinstance(raw, dict):
+                continue
+            content = (raw.get("content") or raw.get("description") or "").strip()
+            if not content:
+                continue
+
+            raw_url = (raw.get("url") or "").strip()
+            title = (raw.get("title") or "").strip() or None
+            source = raw_url if raw_url else f"jina://search?q={urllib.parse.quote(q_clean)}"
+
+            evidence = EvidenceItem(
+                id=str(uuid.uuid4()),
+                source=source,
+                title=title,
+                content=content,
+                retrieved_at=datetime.now(timezone.utc),
+                relevance=0.85 if raw_url else 0.5,
+                approval_status=ApprovalStatus.UNVERIFIED,
+            )
+            items.append(evidence)
+
+        return items
+
+    async def fetch(self, url: str) -> EvidenceItem:
+        """
+        Fetch full page content using Jina Reader (r.jina.ai/<url>).
+
+        Returns an EvidenceItem marked UNVERIFIED.
+        """
+        clean_url = url.strip()
+        if not clean_url:
+            raise ResearchProviderError("Cannot fetch empty URL.")
+
+        import httpx
+        target = f"{self._reader_endpoint}/{clean_url}"
+        headers = self._get_headers()
+
+        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+            try:
+                response = await client.get(target, headers=headers)
+            except httpx.TimeoutException as exc:
+                raise ResearchTimeoutError(
+                    f"Jina Reader fetch timed out after {self._timeout_seconds}s for {clean_url}"
+                ) from exc
+            except httpx.RequestError as exc:
+                raise ResearchProviderError(
+                    f"Jina Reader network error for {clean_url}: {exc}"
+                ) from exc
+
+        if response.status_code in (401, 403):
+            raise ResearchProviderError(
+                f"Jina Reader authentication failed (HTTP {response.status_code})."
+            )
+        if response.status_code != 200:
+            raise ResearchProviderError(
+                f"Jina Reader failed to fetch {clean_url} (HTTP {response.status_code})."
+            )
+
+        content = ""
+        title = None
+        content_type = response.headers.get("content-type", "")
+        if "application/json" in content_type:
+            try:
+                data = response.json()
+                if isinstance(data, dict):
+                    inner = data.get("data", {})
+                    content = inner.get("content", "") if isinstance(inner, dict) else ""
+                    title = inner.get("title") if isinstance(inner, dict) else None
+            except Exception:
+                content = response.text
+        else:
+            content = response.text
+
+        if not content.strip():
+            raise InvalidResearchResultError(f"Jina Reader returned empty content for {clean_url}.")
+
+        return EvidenceItem(
+            id=str(uuid.uuid4()),
+            source=clean_url,
+            title=title or f"Fetched: {clean_url}",
+            content=content.strip(),
+            retrieved_at=datetime.now(timezone.utc),
+            relevance=0.85,
+            approval_status=ApprovalStatus.UNVERIFIED,
+        )
+
+    async def extract_evidence(self, raw: str, source: str) -> EvidenceItem:
+        """Parse raw content into an EvidenceItem marked UNVERIFIED."""
+        if not raw or not raw.strip():
+            raise InvalidResearchResultError("Cannot extract evidence from empty content.")
+        return EvidenceItem(
+            id=str(uuid.uuid4()),
+            source=source,
+            content=raw.strip(),
+            retrieved_at=datetime.now(timezone.utc),
+            relevance=0.7,
+            approval_status=ApprovalStatus.UNVERIFIED,
+        )
