@@ -52,13 +52,16 @@ class FailureClassifier:
 
         Priority: error_code keywords > error message keywords > UNKNOWN.
         """
-        combined = (str(error) + " " + error_code).lower()
+        err_str = str(error) if error is not None else ""
+        code_str = str(error_code) if error_code is not None else ""
+        combined = (err_str + " " + code_str).lower()
 
         for keywords, failure_type in _KEYWORD_MAP:
             if any(kw in combined for kw in keywords):
                 return failure_type
 
         return FailureType.UNKNOWN
+
 
     @staticmethod
     def classify_exception(exc: Exception) -> FailureType:

@@ -8,9 +8,11 @@ class Settings(BaseSettings):
     default_task_timeout: int = 300
     default_retry_limit: int = 3
     log_level: str = "INFO"
-    persistence_backend: str = "memory"
+    persistence_backend: str = "sqlite"
+    sqlite_db_path: str = "orchestrator.db"
 
     class Config:
         env_file = ".env"
 
 settings = Settings()
+

@@ -11,7 +11,7 @@ class Scheduler:
         for step_id, deps in plan_dependencies.items():
             state = step_states.get(f"{execution_id}:{step_id}", StepLifecycle.PENDING)
             
-            if state == StepLifecycle.PENDING:
+            if state in (StepLifecycle.PENDING, StepLifecycle.READY):
                 # Check if all dependencies are COMPLETED
                 deps_completed = True
                 for dep in deps:
@@ -22,6 +22,7 @@ class Scheduler:
                 
                 if deps_completed:
                     ready_queue.append(step_id)
+
 
         # We can return all newly ready steps. Engine will limit concurrency.
         return ready_queue
