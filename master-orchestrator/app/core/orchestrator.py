@@ -76,6 +76,10 @@ class MasterOrchestrator:
             return
 
         # 1. Planning phase
+        try:
+            self.engine.state_manager.transition_execution(execution_id, ExecutionStatus.PLANNING, current_status=execution.status)
+        except Exception:
+            pass
         execution.status = ExecutionStatus.PLANNING
         execution.phase = ExecutionPhase.PLANNING
         execution.updated_at = datetime.datetime.utcnow().isoformat()
@@ -89,6 +93,10 @@ class MasterOrchestrator:
                 request_id=execution.request_id
             )
         except Exception as e:
+            try:
+                self.engine.state_manager.transition_execution(execution_id, ExecutionStatus.FAILED, current_status=execution.status)
+            except Exception:
+                pass
             execution.status = ExecutionStatus.FAILED
             execution.phase = ExecutionPhase.FINALIZING
             execution.error = f"Planning failed: {str(e)}"
@@ -100,11 +108,16 @@ class MasterOrchestrator:
         plan_id = plan.get("plan_id") or plan.get("planId") or f"plan-{uuid.uuid4()}"
         execution.plan_id = plan_id
         execution.plan_version = 1
+        try:
+            self.engine.state_manager.transition_execution(execution_id, ExecutionStatus.PLANNED, current_status=execution.status)
+        except Exception:
+            pass
         execution.status = ExecutionStatus.PLANNED
         execution.updated_at = datetime.datetime.utcnow().isoformat()
         self.repo.save_plan_version(plan)
         self.repo.update_execution(execution)
         self._emit_event(EventType.PLAN_RECEIVED, execution, payload={"plan_id": plan_id, "step_count": len(plan.get("steps", []))})
+
 
         # 2. Launch background execution task
         task = asyncio.create_task(self._run_workflow(execution_id, plan))
@@ -118,6 +131,10 @@ class MasterOrchestrator:
         except Exception as e:
             execution = self.repo.get_execution(execution_id)
             if execution:
+                try:
+                    self.engine.state_manager.transition_execution(execution_id, ExecutionStatus.FAILED)
+                except Exception:
+                    pass
                 execution.status = ExecutionStatus.FAILED
                 execution.error = str(e)
                 execution.updated_at = datetime.datetime.utcnow().isoformat()
@@ -127,6 +144,10 @@ class MasterOrchestrator:
     async def pause(self, execution_id: str) -> Optional[Execution]:
         execution = self.repo.get_execution(execution_id)
         if execution and execution.status in (ExecutionStatus.RUNNING, ExecutionStatus.PLANNING, ExecutionStatus.CREATED):
+            try:
+                self.engine.state_manager.transition_execution(execution_id, ExecutionStatus.PAUSED)
+            except Exception:
+                pass
             execution.status = ExecutionStatus.PAUSED
             execution.updated_at = datetime.datetime.utcnow().isoformat()
             self.repo.update_execution(execution)
@@ -136,6 +157,10 @@ class MasterOrchestrator:
     async def resume(self, execution_id: str) -> Optional[Execution]:
         execution = self.repo.get_execution(execution_id)
         if execution and execution.status == ExecutionStatus.PAUSED:
+            try:
+                self.engine.state_manager.transition_execution(execution_id, ExecutionStatus.RUNNING)
+            except Exception:
+                pass
             execution.status = ExecutionStatus.RUNNING
             execution.updated_at = datetime.datetime.utcnow().isoformat()
             self.repo.update_execution(execution)
@@ -145,6 +170,10 @@ class MasterOrchestrator:
     async def cancel(self, execution_id: str) -> Optional[Execution]:
         execution = self.repo.get_execution(execution_id)
         if execution:
+            try:
+                self.engine.state_manager.transition_execution(execution_id, ExecutionStatus.CANCELLED)
+            except Exception:
+                pass
             execution.status = ExecutionStatus.CANCELLED
             execution.updated_at = datetime.datetime.utcnow().isoformat()
             self.repo.update_execution(execution)
@@ -154,8 +183,66 @@ class MasterOrchestrator:
             self._emit_event(EventType.EXECUTION_CANCELLED, execution)
         return execution
 
+    async def recover_interrupted_workflows(self) -> List[str]:
+        """
+        Scan SQLite for workflows that were interrupted by process termination
+        and safely resume them without duplicating completed steps.
+        """
+        recovered_ids = []
+        interrupted = self.repo.get_interrupted_executions()
+        for execution in interrupted:
+            exec_id = execution.execution_id
+            if execution.status == ExecutionStatus.PLANNING:
+                try:
+                    self.engine.state_manager.transition_execution(exec_id, ExecutionStatus.FAILED)
+                except Exception:
+                    pass
+                execution.status = ExecutionStatus.FAILED
+                execution.error = "Interrupted by process termination during planning phase."
+                execution.updated_at = datetime.datetime.utcnow().isoformat()
+                self.repo.update_execution(execution)
+                self._emit_event(
+                    EventType.EXECUTION_FAILED,
+                    execution,
+                    payload={"recovery": "aborted_interrupted_planning", "reason": execution.error}
+                )
+                recovered_ids.append(exec_id)
+            elif execution.status in (ExecutionStatus.RUNNING, ExecutionStatus.RECOVERING):
+                self._emit_event(
+                    EventType.RECOVERY_STARTED,
+                    execution,
+                    payload={
+                        "recovery_type": "CRASH_RECOVERY",
+                        "completed_steps": execution.completed_steps,
+                        "interrupted_running_steps": execution.running_steps,
+                    }
+                )
+                plan = None
+                if execution.plan_id:
+                    versions = self.repo.get_plan_versions(execution.plan_id)
+                    if versions:
+                        plan = versions[-1]
+
+                if plan:
+                    for s in list(execution.running_steps):
+                        if s not in execution.completed_steps and s not in execution.failed_steps:
+                            if s not in execution.pending_steps:
+                                execution.pending_steps.append(s)
+                    execution.running_steps = []
+                    execution.updated_at = datetime.datetime.utcnow().isoformat()
+                    self.repo.update_execution(execution)
+
+                    # Launch resume task in background
+                    task = asyncio.create_task(self.engine.run(exec_id, plan))
+                    self._background_tasks[exec_id] = task
+                    recovered_ids.append(exec_id)
+
+
+        return recovered_ids
+
     async def get_execution(self, execution_id: str) -> Optional[Execution]:
         return self.repo.get_execution(execution_id)
+
 
     async def get_events(self, execution_id: str) -> list:
         if self.event_store:

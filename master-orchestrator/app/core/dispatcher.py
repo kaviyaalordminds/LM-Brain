@@ -45,15 +45,20 @@ class Dispatcher:
     ) -> DispatchAttempt:
         attempt_id = str(uuid.uuid4())
         step_id = step.get("step_id") or step.get("stepId")
-        idempotency_key = f"{execution_id}:{step_id}:{attempt_id}"
+        specialist_id = step.get("specialist_id") or step.get("specialistId") or ""
+        idempotency_key = f"{execution_id}:{step_id}:{attempt_number}"
         
+        start_time = datetime.datetime.utcnow()
         attempt = DispatchAttempt(
             attempt_id=attempt_id,
             attempt_number=attempt_number,
             step_id=step_id,
+            task_id=attempt_id,
             execution_id=execution_id,
-            started_at=datetime.datetime.utcnow().isoformat(),
+            specialist_id=specialist_id,
+            started_at=start_time.isoformat(),
             status=AttemptStatus.RUNNING,
+            correlation_id=execution_id,
             idempotency_key=idempotency_key
         )
         
@@ -63,7 +68,6 @@ class Dispatcher:
             description = step.get("description", "")
             instruction = f"{title}: {description}" if title and description else (description or title or "Execute step")
             
-            specialist_id = step.get("specialist_id") or step.get("specialistId")
             expected_outputs = step.get("expected_outputs") or step.get("expectedOutputs") or []
             artifact_types = self._infer_artifact_types(expected_outputs)
             
@@ -85,6 +89,8 @@ class Dispatcher:
                         "plan_id": plan_id,
                         "plan_version": plan_version,
                         "step_id": step_id,
+                        "attempt_id": attempt_id,
+                        "attempt_number": attempt_number,
                         "memory_context": memory_context
                     }
                 },
@@ -106,6 +112,7 @@ class Dispatcher:
                     "plan_version": plan_version,
                     "step_id": step_id,
                     "attempt_id": attempt_id,
+                    "attempt_number": attempt_number,
                     "idempotency_key": idempotency_key,
                     "verification_criteria": step.get("verification_criteria") or step.get("verificationCriteria") or []
                 }
@@ -121,6 +128,9 @@ class Dispatcher:
                 attempt.status = AttemptStatus.FAILED
             
             attempt.result = result
+            attempt.model_reference = result.get("metadata", {}).get("model_id") or result.get("model_name")
+            attempt.result_reference = f"res:{attempt_id}"
+
             if attempt.status == AttemptStatus.FAILED:
                 errors = result.get("errors", [])
                 if errors and isinstance(errors, list):
@@ -130,11 +140,16 @@ class Dispatcher:
                 else:
                     attempt.error = result.get("output") or "Specialist task failed"
             
-            attempt.completed_at = datetime.datetime.utcnow().isoformat()
+            end_time = datetime.datetime.utcnow()
+            attempt.completed_at = end_time.isoformat()
+            attempt.duration_ms = (end_time - start_time).total_seconds() * 1000.0
         except Exception as e:
+            end_time = datetime.datetime.utcnow()
             attempt.status = AttemptStatus.FAILED
             attempt.error = str(e)
-            attempt.completed_at = datetime.datetime.utcnow().isoformat()
+            attempt.completed_at = end_time.isoformat()
+            attempt.duration_ms = (end_time - start_time).total_seconds() * 1000.0
             
         return attempt
+
 

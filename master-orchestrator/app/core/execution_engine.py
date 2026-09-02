@@ -87,11 +87,16 @@ class ExecutionEngine:
 
         plan_id = plan.get("plan_id") or plan.get("planId") or "unknown"
         execution.plan_id = plan_id
+        try:
+            self.state_manager.transition_execution(execution_id, ExecutionStatus.RUNNING, current_status=execution.status)
+        except Exception:
+            pass
         execution.status = ExecutionStatus.RUNNING
         execution.phase = ExecutionPhase.SCHEDULING
         execution.updated_at = datetime.datetime.utcnow().isoformat()
         if self.repo:
             self.repo.update_execution(execution)
+
 
         # Extract steps & dependencies
         raw_steps = plan.get("steps", [])
@@ -137,8 +142,27 @@ class ExecutionEngine:
                 self._emit_event(EventType.EXECUTION_CANCELLED, execution, payload={"reason": "Cancelled by user"})
                 return ExecutionResult(ExecutionStatus.CANCELLED, "Execution cancelled")
 
-            # Evaluate scheduler for ready steps
-            ready_steps = self.scheduler.tick(execution_id, self.state_manager.states, norm_dependencies)
+            # Evaluate scheduler for ready steps and dynamically blocked steps
+            tick_result = self.scheduler.tick(execution_id, self.state_manager.states, norm_dependencies)
+            if isinstance(tick_result, tuple):
+                ready_steps, blocked_steps = tick_result
+            else:
+                ready_steps, blocked_steps = tick_result, []
+
+            # Mark newly blocked steps
+            for b_id in blocked_steps:
+                curr_st = self.state_manager.states.get(f"{execution_id}:{b_id}")
+                if curr_st not in (StepLifecycle.BLOCKED, StepLifecycle.COMPLETED, StepLifecycle.FAILED):
+                    try:
+                        self.state_manager.transition_step(execution_id, b_id, StepLifecycle.BLOCKED)
+                    except Exception:
+                        self.state_manager.states[f"{execution_id}:{b_id}"] = StepLifecycle.BLOCKED
+                    if b_id not in execution.blocked_steps:
+                        execution.blocked_steps.append(b_id)
+                    if b_id in execution.pending_steps:
+                        execution.pending_steps.remove(b_id)
+                    if self.repo:
+                        self.repo.update_execution(execution)
 
             # Filter out steps already running or completed
             runnable_steps = [
@@ -155,19 +179,19 @@ class ExecutionEngine:
                 curr_st = self.state_manager.states.get(f"{execution_id}:{sid}")
                 try:
                     if curr_st == StepLifecycle.PENDING:
-                        self.state_manager.transition(execution_id, sid, StepLifecycle.READY)
+                        self.state_manager.transition_step(execution_id, sid, StepLifecycle.READY)
                         self._emit_event(EventType.STEP_READY, execution, step_id=sid)
-                    self.state_manager.transition(execution_id, sid, StepLifecycle.QUEUED)
+                    self.state_manager.transition_step(execution_id, sid, StepLifecycle.QUEUED)
                     self._emit_event(EventType.STEP_QUEUED, execution, step_id=sid)
                 except Exception as e:
                     pass
 
+                self.scheduler.register_in_flight(execution_id, sid)
                 # Launch async task for step execution
                 task = asyncio.create_task(
                     self._execute_step(execution, steps_by_id[sid], norm_dependencies, step_attempts_count)
                 )
                 in_flight_tasks[sid] = task
-
 
             # If no tasks are in-flight and no steps can run, check if we're done or deadlocked
             if not in_flight_tasks:
@@ -190,6 +214,7 @@ class ExecutionEngine:
                 )
 
                 if all_completed:
+                    self.state_manager.transition_execution(execution_id, ExecutionStatus.COMPLETED)
                     execution.status = ExecutionStatus.COMPLETED
                     execution.phase = ExecutionPhase.FINALIZING
                     execution.updated_at = datetime.datetime.utcnow().isoformat()
@@ -202,6 +227,7 @@ class ExecutionEngine:
                     await asyncio.sleep(0.05)
                     continue
                 else:
+                    self.state_manager.transition_execution(execution_id, ExecutionStatus.FAILED)
                     execution.status = ExecutionStatus.FAILED
                     execution.phase = ExecutionPhase.FINALIZING
                     execution.error = execution.error or "Workflow terminated due to unresolvable step failures"
@@ -211,13 +237,14 @@ class ExecutionEngine:
                     self._emit_event(EventType.EXECUTION_FAILED, execution, payload={"error": execution.error})
                     return ExecutionResult(ExecutionStatus.FAILED, execution.error)
 
-
             # Wait for at least one in-flight task to complete
             done, _ = await asyncio.wait(in_flight_tasks.values(), return_when=asyncio.FIRST_COMPLETED)
             # Remove completed tasks from in_flight_tasks
             for sid, t in list(in_flight_tasks.items()):
                 if t in done:
+                    self.scheduler.unregister_in_flight(execution_id, sid)
                     del in_flight_tasks[sid]
+
 
     async def _execute_step(
         self,
@@ -318,6 +345,9 @@ class ExecutionEngine:
             # Register verified artifacts
             for raw_art in task_result.get("artifacts", []):
                 art_id = raw_art.get("artifact_id") or str(uuid.uuid4())
+                art_content = raw_art.get("content", "")
+                checksum = LineageArtifact.calculate_checksum(art_content) if art_content else None
+
                 artifact = LineageArtifact(
                     artifact_id=art_id,
                     execution_id=execution.execution_id,
@@ -326,17 +356,18 @@ class ExecutionEngine:
                     step_id=sid,
                     task_id=attempt.attempt_id,
                     attempt_id=attempt.attempt_id,
-                    specialist_id=step.get("specialist_id") or step.get("specialistId"),
+                    specialist_id=step.get("specialist_id") or step.get("specialistId") or "specialist",
                     artifact_type=raw_art.get("type", "document"),
                     path=raw_art.get("path", ""),
                     url=raw_art.get("url", ""),
-                    content=raw_art.get("content", ""),
+                    content=art_content,
                     is_mock=raw_art.get("is_mock", False),
-                    parent_artifact_ids=[],
-                    source_evidence_refs=[],
-                    trust_state=TrustState.APPROVED,
+                    parent_artifact_ids=raw_art.get("parent_artifact_ids", []),
+                    source_evidence_refs=raw_art.get("source_evidence_refs", []),
+                    trust_state=TrustState.VALIDATED,  # Verified output is VALIDATED; APPROVED requires explicit governance
                     verification_status="PASSED",
-                    created_at=datetime.datetime.utcnow().isoformat()
+                    created_at=datetime.datetime.utcnow().isoformat(),
+                    checksum=checksum
                 )
                 if self.repo:
                     self.repo.save_artifact(artifact)
@@ -347,7 +378,7 @@ class ExecutionEngine:
                     execution,
                     step_id=sid,
                     attempt_id=attempt.attempt_id,
-                    payload={"artifact_id": art_id, "type": artifact.artifact_type}
+                    payload={"artifact_id": art_id, "type": artifact.artifact_type, "checksum": checksum}
                 )
 
             if self.repo:
@@ -360,7 +391,7 @@ class ExecutionEngine:
             f_type = FailureClassifier.classify(raw_err, error_code=attempt.failure_type)
             
             try:
-                self.state_manager.transition(execution.execution_id, sid, StepLifecycle.FAILED)
+                self.state_manager.transition_step(execution.execution_id, sid, StepLifecycle.FAILED)
             except Exception:
                 pass
 
@@ -386,23 +417,28 @@ class ExecutionEngine:
                 payload={"failure_type": f_type.value, "error": raw_err}
             )
 
-            # Check retry policy
+            # Check bounded retry policy
             fp = step.get("failure_policy") or step.get("failurePolicy") or {}
-            max_retries = fp.get("max_retries") or fp.get("maxRetries") or 2
+            max_retries = fp.get("max_retries") or fp.get("maxRetries") or 3
             
-            if RetryPolicy.should_retry(f_type, attempt_num, max_retries):
+            should_retry, backoff, retry_reason = RetryPolicy.evaluate(f_type, attempt_num, max_retries)
+
+            if should_retry:
                 # Schedule retry
-                backoff = RetryPolicy.backoff_seconds(attempt_num)
                 self._emit_event(
                     EventType.RETRY_SCHEDULED,
                     execution,
                     step_id=sid,
-                    payload={"attempt": attempt_num + 1, "backoff_seconds": backoff}
+                    payload={
+                        "attempt": attempt_num + 1,
+                        "backoff_seconds": backoff,
+                        "reason": retry_reason
+                    }
                 )
                 await asyncio.sleep(min(backoff, 2.0))  # Capped for local test performance
                 # Transition FAILED -> READY for retry
                 try:
-                    self.state_manager.transition(execution.execution_id, sid, StepLifecycle.READY)
+                    self.state_manager.transition_step(execution.execution_id, sid, StepLifecycle.READY)
                 except Exception:
                     pass
                 if sid in execution.failed_steps:
@@ -418,7 +454,7 @@ class ExecutionEngine:
                     blocked = self.recovery_manager.compute_downstream_blocked(sid, norm_dependencies)
                     for b in blocked:
                         try:
-                            self.state_manager.transition(execution.execution_id, b, StepLifecycle.BLOCKED)
+                            self.state_manager.transition_step(execution.execution_id, b, StepLifecycle.BLOCKED)
                         except Exception:
                             self.state_manager.states[f"{execution.execution_id}:{b}"] = StepLifecycle.BLOCKED
                         if b not in execution.blocked_steps:
@@ -429,4 +465,5 @@ class ExecutionEngine:
                 if self.repo:
                     self.repo.update_execution(execution)
                 return False
+
 

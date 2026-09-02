@@ -123,3 +123,47 @@ class RecoveryManager:
 
         return blocked
 
+    def isolate_failure(
+        self,
+        failed_step_id: str,
+        dependencies: dict[str, list[str]],
+        completed_steps: list[str],
+        all_step_ids: list[str]
+    ) -> tuple[list[str], list[str]]:
+        """
+        Isolate failure: partition steps into affected (blocked/needing recovery)
+        and preserved (already completed or completely independent).
+        """
+        downstream = set(self.compute_downstream_blocked(failed_step_id, dependencies))
+        downstream.add(failed_step_id)
+
+        affected = [s for s in all_step_ids if s in downstream]
+        preserved = [s for s in all_step_ids if s not in downstream and s in completed_steps]
+
+        return affected, preserved
+
+    def create_replan_metadata(
+        self,
+        execution,
+        failed_step_id: str,
+        failure_reason: str,
+        new_plan_id: str,
+        new_plan_version: int,
+        affected_steps: list[str],
+        preserved_steps: list[str]
+    ) -> dict:
+        """Create canonical recovery replan record for persistence in plan_versions."""
+        import datetime
+        return {
+            "parent_plan_id": execution.plan_id,
+            "parent_plan_version": execution.plan_version,
+            "new_plan_id": new_plan_id,
+            "new_plan_version": new_plan_version,
+            "recovery_reason": failure_reason,
+            "trigger_step_id": failed_step_id,
+            "affected_steps": affected_steps,
+            "preserved_steps": preserved_steps,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+        }
+
+

@@ -2,7 +2,9 @@ from abc import ABC, abstractmethod
 import json
 import sqlite3
 import threading
+import datetime
 from typing import List, Optional
+
 
 from app.models.execution import Execution
 from app.models.dispatch import DispatchAttempt
@@ -99,10 +101,14 @@ class SQLiteExecutionRepository(ExecutionRepository):
 
     def _init_db(self):
         with self._lock, self._get_conn() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS executions (
                     execution_id TEXT PRIMARY KEY,
+                    status TEXT DEFAULT 'CREATED',
                     data TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
                     updated_at TEXT NOT NULL
                 )
             """)
@@ -129,14 +135,54 @@ class SQLiteExecutionRepository(ExecutionRepository):
                     data TEXT NOT NULL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS idempotency_keys (
+                    key TEXT PRIMARY KEY,
+                    execution_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    response TEXT
+                )
+            """)
+            # Safe schema migrations for existing tables
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(executions)").fetchall()]
+            if "status" not in cols:
+                conn.execute("ALTER TABLE executions ADD COLUMN status TEXT DEFAULT 'CREATED'")
+            if "created_at" not in cols:
+                conn.execute("ALTER TABLE executions ADD COLUMN created_at TEXT DEFAULT ''")
+
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_status ON executions(status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_executions_updated ON executions(updated_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_attempts_exec ON attempts(execution_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_exec ON artifacts(execution_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_plans_id_version ON plan_versions(plan_id, version)")
+            conn.commit()
+
+
+    def check_idempotency(self, key: str) -> Optional[dict]:
+        with self._lock, self._get_conn() as conn:
+            row = conn.execute("SELECT response FROM idempotency_keys WHERE key = ?", (key,)).fetchone()
+            if row and row["response"]:
+                return json.loads(row["response"])
+            return None
+
+    def record_idempotency(self, key: str, execution_id: str, response: dict):
+        with self._lock, self._get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO idempotency_keys (key, execution_id, created_at, response) VALUES (?, ?, ?, ?)",
+                (key, execution_id, datetime.datetime.utcnow().isoformat(), json.dumps(response))
+            )
             conn.commit()
 
     def save_execution(self, execution: Execution):
         payload = execution.model_dump(mode="json")
+        status_val = execution.status.value if hasattr(execution.status, "value") else str(execution.status)
         with self._lock, self._get_conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO executions (execution_id, data, updated_at) VALUES (?, ?, ?)",
-                (execution.execution_id, json.dumps(payload), execution.updated_at)
+                """
+                INSERT OR REPLACE INTO executions (execution_id, status, data, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (execution.execution_id, status_val, json.dumps(payload), execution.created_at, execution.updated_at)
             )
             conn.commit()
 
@@ -150,9 +196,37 @@ class SQLiteExecutionRepository(ExecutionRepository):
     def update_execution(self, execution: Execution):
         self.save_execution(execution)
 
-    def list_executions(self) -> List[Execution]:
+    def list_executions(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: Optional[str] = None,
+        search: Optional[str] = None
+    ) -> List[Execution]:
         with self._lock, self._get_conn() as conn:
-            rows = conn.execute("SELECT data FROM executions ORDER BY updated_at DESC").fetchall()
+            query = "SELECT data FROM executions WHERE 1=1"
+            params: list = []
+
+            if status:
+                query += " AND status = ?"
+                params.append(status.upper())
+
+            if search:
+                query += " AND (execution_id LIKE ? OR data LIKE ?)"
+                params.extend([f"%{search}%", f"%{search}%"])
+
+            query += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+            rows = conn.execute(query, params).fetchall()
+            return [Execution.model_validate(json.loads(r["data"])) for r in rows]
+
+    def get_interrupted_executions(self) -> List[Execution]:
+        """Find non-terminal workflows that were running when process crashed."""
+        with self._lock, self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT data FROM executions WHERE status IN ('RUNNING', 'PLANNING', 'RECOVERING')"
+            ).fetchall()
             return [Execution.model_validate(json.loads(r["data"])) for r in rows]
 
     def save_attempt(self, attempt: DispatchAttempt):
@@ -163,6 +237,7 @@ class SQLiteExecutionRepository(ExecutionRepository):
                 (attempt.attempt_id, attempt.execution_id, json.dumps(payload), attempt.idempotency_key)
             )
             conn.commit()
+
 
     def get_attempts(self, execution_id: str) -> List[DispatchAttempt]:
         with self._lock, self._get_conn() as conn:

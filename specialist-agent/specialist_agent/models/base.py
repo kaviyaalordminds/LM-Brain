@@ -29,13 +29,22 @@ from pydantic import BaseModel
 class ModelCapability(str, Enum):
     """Categories of model capability."""
 
-    LOCAL_LLM = "local_llm"
-    REMOTE_LLM = "remote_llm"
+    TEXT_GENERATION = "text_generation"
+    REASONING = "reasoning"
+    CODE_GENERATION = "code_generation"
+    CODE_REVIEW = "code_review"
+    LONG_CONTEXT = "long_context"
+    STRUCTURED_OUTPUT = "structured_output"
+    VISION = "vision"
     IMAGE_GENERATION = "image_generation"
     EMBEDDING = "embedding"
-    VISION = "vision"
-    SPEECH = "speech"
+    TOOL_USE = "tool_use"
+    
+    # Backwards compatibility aliases
+    LOCAL_LLM = "local_llm"
+    REMOTE_LLM = "remote_llm"
     CODE = "code"
+    SPEECH = "speech"
 
 
 class ModelStatus(str, Enum):
@@ -50,27 +59,32 @@ class ModelStatus(str, Enum):
 class ModelInfo(BaseModel):
     """
     Model inventory entry — describes a single model/provider combination.
-
-    This is used by the discovery interface to report what is available.
     """
 
     model_config = {"populate_by_name": True, "protected_namespaces": ()}
 
+    model_id: str = ""
     provider: str
     model_name: str
-    capability: ModelCapability
+    capabilities: list[ModelCapability] = []
     is_local: bool = False
     endpoint: str | None = None
-    gpu_required: bool = False
-    status: ModelStatus = ModelStatus.UNKNOWN
+    context_length: int = 8192
+    max_output: int = 4096
+    priority: int = 1
+    timeout_seconds: float = 60.0
+    status: ModelStatus = ModelStatus.NOT_CONFIGURED
     metadata: dict[str, Any] = {}
 
     def is_available(self) -> bool:
         return self.status == ModelStatus.AVAILABLE
 
+    def has_capability(self, cap: ModelCapability) -> bool:
+        return cap in self.capabilities
+
 
 class ModelResponse(BaseModel):
-    """Response from a model inference call."""
+    """Response from a model inference call with real telemetry."""
 
     model_config = {"populate_by_name": True, "protected_namespaces": ()}
 
@@ -80,7 +94,14 @@ class ModelResponse(BaseModel):
     error_code: str | None = None
     provider: str = ""
     model_name: str = ""
+    model_id: str = ""
+    latency_ms: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    finish_reason: str | None = None
     metadata: dict[str, Any] = {}
+
 
 
 class ModelProvider(ABC):
