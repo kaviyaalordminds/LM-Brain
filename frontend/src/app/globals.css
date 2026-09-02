@@ -1,75 +1,99 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --background: #090d16;
-  --foreground: #f8fafc;
-  --card: #0d1527;
-  --card-foreground: #f8fafc;
-  --popover: #0d1527;
-  --popover-foreground: #f8fafc;
-  --primary: #6366f1;
-  --primary-foreground: #ffffff;
-  --secondary: #1e293b;
-  --secondary-foreground: #f8fafc;
-  --muted: #1e293b;
-  --muted-foreground: #94a3b8;
-  --accent: #3b82f6;
-  --accent-foreground: #ffffff;
-  --destructive: #ef4444;
-  --destructive-foreground: #ffffff;
-  --border: #1e293b;
-  --input: #1e293b;
-  --ring: #6366f1;
+  --bg-space-950: #080b10;
+  --bg-space-900: #0d1118;
+  --bg-space-850: #131923;
+  --bg-space-800: #1b2433;
+  --bg-space-750: #232e40;
+  --border-subtle: #1e293b;
+  --border-bright: #334155;
+  --fg-primary: #f8fafc;
+  --fg-secondary: #94a3b8;
+  --fg-dim: #64748b;
+  --status-running: #10b981;
+  --status-queued: #06b6d4;
+  --status-verifying: #8b5cf6;
+  --status-warning: #f59e0b;
+  --status-blocked: #f97316;
+  --status-failed: #ef4444;
 }
 
 body {
-  background-color: var(--background);
-  color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  background-color: var(--bg-space-950);
+  color: var(--fg-primary);
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
 }
 
-/* Custom Scrollbar styling */
+/* Custom Workstation Scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #090d16;
+  background: #080b10;
 }
 ::-webkit-scrollbar-thumb {
   background: #1e293b;
-  border-radius: 3px;
+  border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #334155;
 }
 
-/* Accessible focus ring style */
-.focus-ring {
-  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#090d16];
+/* High-contrast keyboard focus styling */
+:focus-visible {
+  outline: 2px solid #38bdf8 !important;
+  outline-offset: 1px !important;
 }
 
-/* Subtle glow effects (restrained as per design specs) */
-.premium-glow-indigo {
-  box-shadow: 0 0 15px -3px rgba(99, 102, 241, 0.15);
-}
-.premium-glow-emerald {
-  box-shadow: 0 0 15px -3px rgba(16, 185, 129, 0.15);
-}
-.premium-glow-rose {
-  box-shadow: 0 0 15px -3px rgba(244, 63, 94, 0.15);
+/* Technical Monospace Elements */
+.font-mono-tech {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-@keyframes spin-slow {
+/* Subtle Technical Grid Background */
+.bg-grid-workstation {
+  background-image: 
+    linear-gradient(to right, rgba(30, 41, 59, 0.25) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(30, 41, 59, 0.25) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* DAG Node Edge Active Flow Beam */
+@keyframes dagFlow {
   from {
-    transform: rotate(0deg);
+    stroke-dashoffset: 32;
   }
   to {
-    transform: rotate(360deg);
+    stroke-dashoffset: 0;
   }
 }
-.animate-spin-slow {
-  animation: spin-slow 8s linear infinite;
+.dag-flow-active {
+  stroke-dasharray: 6 6;
+  animation: dagFlow 1.2s linear infinite;
 }
+
+/* Accessibility: Reduced Motion Override */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .dag-flow-active {
+    animation: none !important;
+    stroke-dasharray: none !important;
+  }
+}
+

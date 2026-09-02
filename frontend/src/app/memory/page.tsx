@@ -1,151 +1,156 @@
-'use client';
+﻿'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Header } from '@/components/layout/Header';
-import { memoryService } from '@/lib/api/memoryService';
-import { MemoryItem } from '@/lib/types';
-import { Database, Link2, RefreshCw, Layers, CheckCircle2, AlertTriangle, FileText } from 'lucide-react';
-import { cn } from '@/lib/utils/cn';
+import { orchestratorApi } from '@/lib/api/orchestrator';
+import { TrustBadge } from '@/components/memory/TrustBadge';
+import { Brain, Database, ShieldCheck, Search, FileText, CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
 
-export default function Page() {
-  const [items, setItems] = useState<MemoryItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isSyncing, setIsSyncing] = useState(false);
+export default function MemoryKnowledgePage() {
+  const [memoryStatus, setMemoryStatus] = useState<string>('Checking...');
+  const [activeTab, setActiveTab] = useState<'vault' | 'evidence' | 'trust'>('trust');
 
   useEffect(() => {
-    const fetch = async () => {
-      const m = await memoryService.getMemoryItems();
-      setItems(m);
-      setLoading(false);
-    };
-    fetch();
+    orchestratorApi.checkReady().then((res) => {
+      setMemoryStatus(res.dependencies?.memory === 'up' ? 'CONNECTED' : 'STANDBY');
+    }).catch(() => setMemoryStatus('OFFLINE'));
   }, []);
 
-  const handleSync = () => {
-    setIsSyncing(true);
-    setTimeout(() => {
-      setIsSyncing(false);
-      alert('Obsidian Vault directories scanned. 4 memory items synced locally.');
-    }, 1500);
-  };
-
-  const retrievedItems = items.filter(item => item.type === 'retrieved');
-  const writtenItems = items.filter(item => item.type !== 'retrieved');
-
   return (
-    <div className="flex flex-col min-h-full pb-10">
-      <Header
-        title="Knowledge & Memory"
-        subtitle="Access local Obsidian vaults and sync agent lesson checkpoints."
-      />
-
-      <div className="flex-1 px-6 py-6 space-y-6 max-w-6xl mx-auto w-full select-none">
-        
-        {/* Obsidian Vault configuration panel */}
-        <div className="bg-[#0c1322] border border-slate-800 rounded-xl p-5 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="md:col-span-2 space-y-4">
-            <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-              <Database className="h-5 w-5 text-indigo-400" />
-              Obsidian Vault Partition
-            </h3>
-            
-            <p className="text-xs text-slate-400 font-mono leading-relaxed">
-              The platform references standard Markdown files in your local vault as the company memory layer. Newly validated decisions and architectural schemas are written back automatically as system checkpoints.
-            </p>
-
-            <div className="flex flex-col gap-2 pt-1 font-mono text-[11px]">
-              <div className="flex justify-between border-b border-slate-900 pb-2">
-                <span className="text-slate-500">Vault Location:</span>
-                <span className="text-slate-300">C:/Users/Anshif/Obsidian/Lordminds</span>
-              </div>
-              <div className="flex justify-between border-b border-slate-900 pb-2">
-                <span className="text-slate-500">Last Synced Checkpoint:</span>
-                <span className="text-slate-300">2026-08-31 09:02:25</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Workspace Status:</span>
-                <span className="text-amber-500 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded">CONNECTION PENDING (LOCAL VAULT ONLY)</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col justify-center items-stretch gap-3 border-t md:border-t-0 md:border-l border-slate-800 pt-4 md:pt-0 md:pl-6 shrink-0">
-            <button
-              onClick={handleSync}
-              disabled={isSyncing}
-              className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white disabled:text-slate-500 text-xs py-2.5 px-4 rounded-lg font-bold transition-all focus-ring uppercase tracking-wider font-mono"
-            >
-              <RefreshCw className={cn("h-4 w-4", isSyncing && "animate-spin")} />
-              {isSyncing ? "Syncing markdown..." : "Sync Vault Now"}
-            </button>
-            <div className="text-[10px] text-center font-mono text-slate-500">
-              Files parsed offline. No cloud network usage.
+    <div className="space-y-6 font-mono-tech">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-space-900 border border-space-800 rounded-lg shadow-md">
+        <div className="flex items-center gap-3">
+          <Brain className="w-5 h-5 text-purple-400" />
+          <div>
+            <h1 className="text-xs font-bold text-slate-100 uppercase tracking-wider">
+              Memory Agent & Knowledge Vault
+            </h1>
+            <div className="text-[11px] text-slate-400">
+              Service: Memory Agent (Port 8001) | Obsidian Local Vault & Controlled Research
             </div>
           </div>
         </div>
 
-        {/* Memory Items Section */}
-        {loading ? (
-          <div className="h-64 flex items-center justify-center font-mono text-xs text-slate-500">
-            Reading Obsidian index...
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-            
-            {/* Left Col: Retrieved brand context */}
-            <div className="space-y-4">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <FileText className="h-4 w-4 text-indigo-400" />
-                Retrieved Context Guidelines
-              </h3>
-              
-              <div className="space-y-3">
-                {retrievedItems.map(item => (
-                  <div key={item.id} className="border border-slate-800 bg-[#0c1322] rounded-lg p-3 space-y-2">
-                    <div className="flex justify-between items-start gap-2">
-                      <h4 className="text-xs font-bold text-slate-200">{item.title}</h4>
-                      <span className="text-[8px] bg-slate-900 px-1.5 py-0.5 rounded text-indigo-400 font-mono uppercase">Read Only</span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed font-mono">
-                      {item.content}
-                    </p>
-                    <div className="text-[9px] font-mono text-slate-500 pt-1 border-t border-slate-900">
-                      Used by: {item.usedBy.join(', ')}
-                    </div>
-                  </div>
-                ))}
-              </div>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-slate-500">Service Status:</span>
+          <span className={`px-2 py-0.5 rounded border text-[10px] ${
+            memoryStatus === 'CONNECTED'
+              ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300'
+              : 'bg-space-950 border-space-750 text-slate-400'
+          }`}>
+            {memoryStatus}
+          </span>
+        </div>
+      </div>
+
+      {/* Trust Philosophy Callout */}
+      <div className="p-4 bg-space-900 border border-purple-900/40 rounded-lg space-y-2">
+        <div className="flex items-center gap-2 text-xs font-bold text-purple-300">
+          <ShieldCheck className="w-4 h-4 text-purple-400" />
+          <span>ZERO-TRUST MEMORY ARCHITECTURE</span>
+        </div>
+        <p className="text-xs text-slate-300 font-sans leading-relaxed">
+          The Memory Agent enforces strict cryptographic and evidence verification before contextual write.
+          Context retrieved from external research is explicitly marked as <strong>RETRIEVED</strong> and is <strong>NEVER</strong> treated as trusted until validated against the Obsidian vault and approved.
+        </p>
+      </div>
+
+      {/* Trust States Taxonomy */}
+      <div className="bg-space-900 border border-space-800 rounded-lg p-5 space-y-4">
+        <div className="text-xs font-bold text-slate-200 uppercase tracking-wider pb-2 border-b border-space-800">
+          Memory Trust States & Verification Rules
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="p-3 bg-space-950 border border-space-800 rounded space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-200">APPROVED</span>
+              <TrustBadge state="APPROVED" size="sm" />
             </div>
-
-            {/* Right Col: Written decisions & lessons */}
-            <div className="space-y-4">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <Database className="h-4 w-4 text-indigo-400" />
-                System Decisions & Lessons Learned
-              </h3>
-
-              <div className="space-y-3">
-                {writtenItems.map(item => (
-                  <div key={item.id} className="border border-slate-800 bg-[#0c1322] rounded-lg p-3 space-y-2">
-                    <div className="flex justify-between items-start gap-2">
-                      <h4 className="text-xs font-bold text-slate-200">{item.title}</h4>
-                      <span className="text-[8px] bg-indigo-950/20 border border-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-mono uppercase">Written Checkpoint</span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed font-mono">
-                      {item.content}
-                    </p>
-                    <div className="text-[9px] font-mono text-slate-500 pt-1 border-t border-slate-900 flex justify-between">
-                      <span>Authored: {item.usedBy.join(', ')}</span>
-                      <span>{new Date(item.timestamp).toLocaleDateString()}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
+            <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
+              Cryptographically or authoritatively verified knowledge approved for persistence in the enterprise Obsidian vault.
+            </p>
           </div>
-        )}
 
+          <div className="p-3 bg-space-950 border border-space-800 rounded space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-200">VALIDATED</span>
+              <TrustBadge state="VALIDATED" size="sm" />
+            </div>
+            <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
+              Evidence that satisfies schema verification, consistency checks, and source citations without contradiction.
+            </p>
+          </div>
+
+          <div className="p-3 bg-space-950 border border-space-800 rounded space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-200">RETRIEVED</span>
+              <TrustBadge state="RETRIEVED" size="sm" />
+            </div>
+            <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
+              Freshly collected context from web research or local markdown search, pending policy audit.
+            </p>
+          </div>
+
+          <div className="p-3 bg-space-950 border border-space-800 rounded space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-200">PENDING</span>
+              <TrustBadge state="PENDING" size="sm" />
+            </div>
+            <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
+              Context currently queued in the ValidationLayer for verification against existing documentation.
+            </p>
+          </div>
+
+          <div className="p-3 bg-space-950 border border-space-800 rounded space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-200">UNVERIFIED</span>
+              <TrustBadge state="UNVERIFIED" size="sm" />
+            </div>
+            <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
+              Raw outputs or untrusted external inputs. Must not be used for critical architectural decisions.
+            </p>
+          </div>
+
+          <div className="p-3 bg-space-950 border border-space-800 rounded space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-200">REJECTED</span>
+              <TrustBadge state="REJECTED" size="sm" />
+            </div>
+            <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
+              Contradictory, hallucinated, or policy-violating information rejected by the MemoryWriter.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Vault Structure Info */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-space-900 border border-space-800 rounded-lg p-4 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+            <Database className="w-4 h-4 text-purple-400" />
+            <span>LOCAL OBSIDIAN VAULT</span>
+          </div>
+          <p className="text-xs text-slate-400 font-sans leading-relaxed">
+            Local Obsidian Adapter indexes markdown documentation across software, web architecture, reliability, and production engineering.
+          </p>
+          <div className="text-[11px] text-slate-500 font-mono">
+            Adapter Mode: <span className="text-slate-300">Local / Real Markdown Vault</span>
+          </div>
+        </div>
+
+        <div className="bg-space-900 border border-space-800 rounded-lg p-4 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+            <Search className="w-4 h-4 text-cyan-400" />
+            <span>RESEARCH PROVIDER</span>
+          </div>
+          <p className="text-xs text-slate-400 font-sans leading-relaxed">
+            Jina Reader / Mock research provider parses technical RFCs and documentation under controlled rate limits.
+          </p>
+          <div className="text-[11px] text-slate-500 font-mono">
+            Provider: <span className="text-slate-300">Jina Research Provider / Local Fallback</span>
+          </div>
+        </div>
       </div>
     </div>
   );

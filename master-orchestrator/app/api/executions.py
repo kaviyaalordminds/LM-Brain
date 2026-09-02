@@ -59,3 +59,31 @@ async def get_execution_events(execution_id: str):
     events = await orchestrator.get_events(execution_id)
     return [e.model_dump(mode="json") if hasattr(e, "model_dump") else e for e in events]
 
+@router.get("/api/v1/executions")
+async def list_executions():
+    orchestrator = get_orchestrator()
+    executions = orchestrator.repo.list_executions()
+    return [e.model_dump(mode="json") if hasattr(e, "model_dump") else e for e in executions]
+
+
+@router.get("/api/v1/executions/{execution_id}/artifacts")
+async def get_execution_artifacts(execution_id: str):
+    orchestrator = get_orchestrator()
+    artifacts = orchestrator.repo.get_artifacts(execution_id)
+    return [a.model_dump(mode="json") if hasattr(a, "model_dump") else a for a in artifacts]
+
+@router.get("/api/v1/executions/{execution_id}/attempts")
+async def get_execution_attempts(execution_id: str):
+    orchestrator = get_orchestrator()
+    attempts = orchestrator.repo.get_attempts(execution_id)
+    return [a.model_dump(mode="json") if hasattr(a, "model_dump") else a for a in attempts]
+
+@router.get("/api/v1/plans/{plan_id}")
+async def get_plan(plan_id: str):
+    orchestrator = get_orchestrator()
+    plans = orchestrator.repo.get_plan_versions(plan_id)
+    if not plans:
+        raise HTTPException(status_code=404, detail=f"Plan {plan_id} not found")
+    return plans[-1]
+
+
