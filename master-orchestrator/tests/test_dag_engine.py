@@ -19,25 +19,28 @@ class TestSchedulerReadyQueue:
         scheduler = Scheduler(max_concurrent_tasks=5)
         deps = {"step-1": [], "step-2": []}
         states = make_states("exec-1", {})
-        ready = scheduler.tick("exec-1", states, deps)
+        ready, blocked = scheduler.tick("exec-1", states, deps)
         assert "step-1" in ready
         assert "step-2" in ready
+        assert blocked == []
 
     def test_dependent_step_not_ready_until_dependency_completes(self):
         scheduler = Scheduler(max_concurrent_tasks=5)
         deps = {"step-1": [], "step-2": ["step-1"]}
         # step-1 is RUNNING, step-2 should not be ready
         states = make_states("exec-1", {"step-1": StepLifecycle.RUNNING})
-        ready = scheduler.tick("exec-1", states, deps)
+        ready, blocked = scheduler.tick("exec-1", states, deps)
         assert "step-2" not in ready
+        assert blocked == []
 
     def test_dependent_step_becomes_ready_when_dep_completes(self):
         scheduler = Scheduler(max_concurrent_tasks=5)
         deps = {"step-1": [], "step-2": ["step-1"]}
         # step-1 is COMPLETED
         states = make_states("exec-1", {"step-1": StepLifecycle.COMPLETED})
-        ready = scheduler.tick("exec-1", states, deps)
+        ready, blocked = scheduler.tick("exec-1", states, deps)
         assert "step-2" in ready
+        assert blocked == []
 
     def test_parallel_independent_steps_all_ready(self):
         """
@@ -52,25 +55,25 @@ class TestSchedulerReadyQueue:
             "backend": ["research"],
         }
         states = make_states("exec-1", {"research": StepLifecycle.COMPLETED})
-        ready = scheduler.tick("exec-1", states, deps)
+        ready, blocked = scheduler.tick("exec-1", states, deps)
         assert "database" in ready
         assert "backend" in ready
+        assert blocked == []
 
     def test_step_already_running_not_requeued(self):
         scheduler = Scheduler(max_concurrent_tasks=5)
         deps = {"step-1": []}
         # step-1 is already RUNNING
         states = make_states("exec-1", {"step-1": StepLifecycle.RUNNING})
-        ready = scheduler.tick("exec-1", states, deps)
+        ready, blocked = scheduler.tick("exec-1", states, deps)
         # Only PENDING steps are considered ready
         assert "step-1" not in ready
 
     def test_step_already_completed_not_requeued(self):
-
         scheduler = Scheduler(max_concurrent_tasks=5)
         deps = {"step-1": []}
         states = make_states("exec-1", {"step-1": StepLifecycle.COMPLETED})
-        ready = scheduler.tick("exec-1", states, deps)
+        ready, blocked = scheduler.tick("exec-1", states, deps)
         assert "step-1" not in ready
 
     def test_chained_dependency_graph(self):
@@ -83,7 +86,7 @@ class TestSchedulerReadyQueue:
         }
         # Only step-1 completed
         states = make_states("exec-1", {"step-1": StepLifecycle.COMPLETED})
-        ready = scheduler.tick("exec-1", states, deps)
+        ready, blocked = scheduler.tick("exec-1", states, deps)
         assert "step-2" in ready
         assert "step-3" not in ready
 
@@ -92,15 +95,15 @@ class TestSchedulerReadyQueue:
             "step-1": StepLifecycle.COMPLETED,
             "step-2": StepLifecycle.COMPLETED,
         })
-        ready = scheduler.tick("exec-1", states, deps)
+        ready, blocked = scheduler.tick("exec-1", states, deps)
         assert "step-3" in ready
 
 
 class TestSchedulerCancellation:
     def test_cancel_clears_in_flight(self):
         scheduler = Scheduler(max_concurrent_tasks=5)
-        scheduler.in_flight.add("step-1")
-        scheduler.in_flight.add("step-2")
+        scheduler.register_in_flight("exec-1", "step-1")
+        scheduler.register_in_flight("exec-1", "step-2")
         scheduler.cancel("exec-1")
         assert len(scheduler.in_flight) == 0
 
@@ -112,7 +115,8 @@ class TestSchedulerConcurrencyLimit:
         scheduler = Scheduler(max_concurrent_tasks=2)
         deps = {"step-1": [], "step-2": [], "step-3": []}
         states = make_states("exec-1", {})
-        ready = scheduler.tick("exec-1", states, deps)
+        ready, blocked = scheduler.tick("exec-1", states, deps)
         # All three have no deps, all should appear as ready
         assert len(ready) == 3
+
 

@@ -154,8 +154,9 @@ class TestDispatchModel:
 
 class TestArtifactsModel:
     def test_trust_state_values(self):
-        expected = {"UNVERIFIED", "VALIDATED", "APPROVED", "RETRIEVED"}
+        expected = {"UNVERIFIED", "VALIDATED", "APPROVED", "RETRIEVED", "REJECTED", "PENDING"}
         assert {t.value for t in TrustState} == expected
+
 
     def test_lineage_artifact_instantiation(self):
         import datetime, uuid

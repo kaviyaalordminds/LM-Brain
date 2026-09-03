@@ -107,12 +107,14 @@ async def test_dag_dependency_execution_order():
         execution_id="exec-dag-1",
         request_id="req-1",
         user_request="test",
+        status=ExecutionStatus.PLANNED,
         created_at=datetime.datetime.utcnow().isoformat(),
         updated_at=datetime.datetime.utcnow().isoformat(),
         correlation_id="exec-dag-1"
     )
     repo.save_execution(ex)
-    
+    state_mgr.execution_states["exec-dag-1"] = ExecutionStatus.PLANNED
+
     plan = {
         "plan_id": "plan-dag-1",
         "steps": [
@@ -177,11 +179,13 @@ async def test_parallel_execution_concurrency():
         execution_id="exec-parallel-1",
         request_id="req-p",
         user_request="test",
+        status=ExecutionStatus.PLANNED,
         created_at=datetime.datetime.utcnow().isoformat(),
         updated_at=datetime.datetime.utcnow().isoformat(),
         correlation_id="exec-parallel-1"
     )
     repo.save_execution(ex)
+    state_mgr.execution_states["exec-parallel-1"] = ExecutionStatus.PLANNED
     
     plan = {
         "plan_id": "plan-p",
@@ -226,11 +230,13 @@ async def test_verification_failure_prevents_completion():
         execution_id="exec-vfail",
         request_id="req-vf",
         user_request="test",
+        status=ExecutionStatus.PLANNED,
         created_at=datetime.datetime.utcnow().isoformat(),
         updated_at=datetime.datetime.utcnow().isoformat(),
         correlation_id="exec-vfail"
     )
     repo.save_execution(ex)
+    state_mgr.execution_states["exec-vfail"] = ExecutionStatus.PLANNED
     
     plan = {
         "plan_id": "plan-vf",
@@ -291,11 +297,15 @@ async def test_retry_creates_new_attempt():
         execution_id="exec-retry",
         request_id="req-r",
         user_request="test",
+        status=ExecutionStatus.PLANNED,
         created_at=datetime.datetime.utcnow().isoformat(),
         updated_at=datetime.datetime.utcnow().isoformat(),
         correlation_id="exec-retry"
     )
     repo.save_execution(ex)
+    state_mgr.execution_states["exec-retry"] = ExecutionStatus.PLANNED
+
+
     
     plan = {
         "plan_id": "plan-retry",

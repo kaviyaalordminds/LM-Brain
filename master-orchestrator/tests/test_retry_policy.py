@@ -40,9 +40,15 @@ class TestRequiresReplan:
         assert RetryPolicy.should_retry(FailureType.CONTRACT_VIOLATION, attempt_number=0, max_retries=10) is False
         assert FailureType.CONTRACT_VIOLATION in REQUIRES_REPLAN
 
-    def test_verification_failed_requires_replan(self):
-        assert RetryPolicy.should_retry(FailureType.VERIFICATION_FAILED, attempt_number=0, max_retries=10) is False
-        assert FailureType.VERIFICATION_FAILED in REQUIRES_REPLAN
+    def test_dependency_failed_requires_replan(self):
+        assert RetryPolicy.should_retry(FailureType.DEPENDENCY_FAILED, attempt_number=0, max_retries=10) is False
+        assert FailureType.DEPENDENCY_FAILED in REQUIRES_REPLAN
+
+    def test_verification_failed_bounded_retries(self):
+        # Bounded to 2 attempts
+        assert RetryPolicy.should_retry(FailureType.VERIFICATION_FAILED, attempt_number=0, max_retries=3) is True
+        assert RetryPolicy.should_retry(FailureType.VERIFICATION_FAILED, attempt_number=1, max_retries=3) is True
+        assert RetryPolicy.should_retry(FailureType.VERIFICATION_FAILED, attempt_number=2, max_retries=3) is False
 
 
 class TestBudgetExhaustion:
@@ -50,28 +56,36 @@ class TestBudgetExhaustion:
         assert RetryPolicy.should_retry(FailureType.TIMEOUT, attempt_number=3, max_retries=3) is False
 
     def test_budget_at_limit_is_exhausted(self):
-        assert RetryPolicy.should_retry(FailureType.SERVICE_UNAVAILABLE, attempt_number=2, max_retries=2) is False
+        assert RetryPolicy.should_retry(FailureType.SERVICE_UNAVAILABLE, attempt_number=3, max_retries=3) is False
 
     def test_budget_one_remaining(self):
         assert RetryPolicy.should_retry(FailureType.TIMEOUT, attempt_number=1, max_retries=2) is True
 
 
 class TestBackoffCalculation:
-    def test_attempt_0_backoff_is_1(self):
-        assert RetryPolicy.backoff_seconds(0) == 1.0
+    def test_attempt_0_backoff_bounded(self):
+        val = RetryPolicy.backoff_seconds(0)
+        assert 1.0 <= val <= 1.3
 
-    def test_attempt_1_backoff_is_2(self):
-        assert RetryPolicy.backoff_seconds(1) == 2.0
+    def test_attempt_1_backoff_bounded(self):
+        val = RetryPolicy.backoff_seconds(1)
+        assert 1.5 <= val <= 1.8
 
-    def test_attempt_2_backoff_is_4(self):
-        assert RetryPolicy.backoff_seconds(2) == 4.0
+    def test_attempt_2_backoff_bounded(self):
+        val = RetryPolicy.backoff_seconds(2)
+        assert 2.25 <= val <= 2.6
 
-    def test_attempt_3_backoff_is_8(self):
-        assert RetryPolicy.backoff_seconds(3) == 8.0
+    def test_attempt_3_backoff_bounded(self):
+        val = RetryPolicy.backoff_seconds(3)
+        assert 3.37 <= val <= 3.7
 
     def test_backoff_capped_at_30(self):
-        # 2^10 = 1024, must be capped at 30
-        assert RetryPolicy.backoff_seconds(10) == 30.0
+        # Large attempt exponent must be capped at 30 + jitter
+        val = RetryPolicy.backoff_seconds(10)
+        assert 30.0 <= val <= 30.3
 
-    def test_backoff_returns_float(self):
+    def test_backoff_returns_float_with_jitter(self):
         assert isinstance(RetryPolicy.backoff_seconds(1), float)
+        # Verify values are positive and non-zero
+        assert RetryPolicy.backoff_seconds(0) > 0.0
+

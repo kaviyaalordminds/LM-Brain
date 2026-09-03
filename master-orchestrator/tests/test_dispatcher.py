@@ -55,7 +55,8 @@ async def test_dispatcher_maps_plan_step_deterministically():
     assert attempt.step_id == "step-backend-1"
     assert attempt.attempt_number == 0
     assert attempt.status == AttemptStatus.COMPLETED
-    assert f"exec-001:step-backend-1:{attempt.attempt_id}" == attempt.idempotency_key
+    assert attempt.idempotency_key == f"exec-001:step-backend-1:{attempt.attempt_number}"
+
     
     # Inspect mapped task_request
     assert len(mock_client.dispatched_requests) == 1

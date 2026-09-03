@@ -53,10 +53,16 @@ class TestDecisionMatrix:
         decision = rm.analyze_failure("step-1", FailureType.CONTRACT_VIOLATION, attempt_number=0, max_retries=10)
         assert decision == RecoveryDecision.REPLAN
 
-    def test_verification_failed_triggers_replan(self):
+    def test_verification_failed_retries_then_replans(self):
         rm = RecoveryManager()
-        decision = rm.analyze_failure("step-1", FailureType.VERIFICATION_FAILED, attempt_number=0, max_retries=10)
-        assert decision == RecoveryDecision.REPLAN
+        # Attempt 0: within retry budget -> RETRY
+        decision_retry = rm.analyze_failure("step-1", FailureType.VERIFICATION_FAILED, attempt_number=0, max_retries=2)
+        assert decision_retry == RecoveryDecision.RETRY
+
+        # Attempt 2: budget exhausted -> REPLAN
+        decision_replan = rm.analyze_failure("step-1", FailureType.VERIFICATION_FAILED, attempt_number=2, max_retries=2)
+        assert decision_replan == RecoveryDecision.REPLAN
+
 
     def test_budget_exhausted_triggers_replan(self):
         rm = RecoveryManager()
