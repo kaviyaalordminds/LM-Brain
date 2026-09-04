@@ -1,0 +1,3 @@
+"""
+Registry capability matching module
+"""
