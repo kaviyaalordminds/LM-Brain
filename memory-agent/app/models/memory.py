@@ -187,6 +187,37 @@ class MemoryWriteAudit(CamelModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Task Understanding & Knowledge Gap Models
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TaskScope(CamelModel):
+    """
+    Structured decomposition of the user query / task.
+    Distinguishes domain, entity, platform, task type, and discrete requirements.
+    """
+
+    task_type: str = Field(..., description="Categorized task type (e.g. website_creation, ad_campaign, research)")
+    domain: str | None = Field(None, description="Domain / industry (e.g. e-commerce, healthcare, quantum_computing)")
+    entity: str | None = Field(None, description="Specific named entity (e.g. Lordminds, Tesla) or None if generic")
+    platform: str | None = Field(None, description="Target platform / tech (e.g. Instagram, React, Web, iOS)")
+    requirements: list[str] = Field(default_factory=list, description="Discrete technical or business requirements")
+    raw_query: str = Field(..., description="Original input query")
+
+
+class KnowledgeGapItem(CamelModel):
+    """
+    Represents an individual requirement and whether Obsidian satisfied it.
+    """
+
+    requirement: str = Field(..., description="Requirement description")
+    status: str = Field(..., description="Status: satisfied | missing | partial")
+    matched_note: str | None = Field(None, description="Relative path of satisfying note if found")
+    relevance: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason: str | None = Field(None, description="Explanation of why requirement is satisfied or missing")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # API Request / Response Models
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -200,6 +231,11 @@ class SearchRequest(CamelModel):
     filters: dict[str, Any] = Field(
         default_factory=dict, description="Optional metadata filters"
     )
+    task_scope: TaskScope | None = Field(None, description="Optional pre-parsed task scope")
+    auto_research: bool = Field(
+        default=False,
+        description="If True and knowledge gaps exist, automatically trigger Jina research, validation, Obsidian write-back, and re-retrieval",
+    )
 
 
 class SearchResponse(CamelModel):
@@ -208,6 +244,9 @@ class SearchResponse(CamelModel):
     results: list[MemoryResult]
     found: bool
     count: int
+    task_scope: TaskScope | None = Field(None, description="Extracted task understanding")
+    knowledge_gaps: list[KnowledgeGapItem] = Field(default_factory=list, description="Identified knowledge gaps")
+    debug_info: dict[str, Any] = Field(default_factory=dict, description="Diagnostic retrieval metadata")
 
 
 class ResearchRequest(CamelModel):
@@ -215,6 +254,7 @@ class ResearchRequest(CamelModel):
 
     query: str = Field(..., min_length=1)
     task_id: str | None = Field(None, description="Optional task correlation ID")
+    task_scope: TaskScope | None = Field(None, description="Optional task scope")
 
 
 class ResearchResponse(CamelModel):
@@ -223,6 +263,7 @@ class ResearchResponse(CamelModel):
     evidence: list[EvidenceItem]
     sources: list[str]
     count: int
+    task_scope: TaskScope | None = Field(None, description="Extracted task understanding")
 
 
 class ValidateRequest(CamelModel):
@@ -231,6 +272,7 @@ class ValidateRequest(CamelModel):
     evidence: list[EvidenceItem]
     query: str = Field(..., min_length=1)
     context: str | None = None
+    task_scope: TaskScope | None = None
 
 
 class ValidateResponse(CamelModel):
@@ -268,6 +310,8 @@ class ContextResponse(CamelModel):
     context: list[MemoryResult]
     sources: list[str]
     timestamp: datetime
+    task_scope: TaskScope | None = Field(None, description="Task understanding")
+    knowledge_gaps: list[KnowledgeGapItem] = Field(default_factory=list, description="Knowledge gaps")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

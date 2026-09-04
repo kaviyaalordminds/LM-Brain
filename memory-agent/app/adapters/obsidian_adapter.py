@@ -8,12 +8,8 @@ Defines the ObsidianAdapter abstract interface and concrete implementations:
 INTEGRATION POINT
 ─────────────────
 The LocalObsidianAdapter indexes local Markdown vault files (*.md) with YAML frontmatter,
-headings, tags, and wikilinks. It uses high-performance lexical indexing with BM25 and
-metadata boosting (title, headings, tags, exact phrases).
-
-To configure:
-  OBSIDIAN_ADAPTER=local
-  OBSIDIAN_VAULT_PATH=C:\\Lordminds\\Multiagent\\memory-agent\\obsedian
+headings, tags, and wikilinks. It uses high-performance lexical indexing with BM25,
+entity disambiguation, domain relevance gating, and metadata boosting.
 """
 
 from __future__ import annotations
@@ -30,7 +26,7 @@ from typing import Any
 
 import yaml
 
-from app.models.memory import ApprovalStatus, MemoryResult
+from app.models.memory import ApprovalStatus, MemoryResult, TaskScope
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +56,6 @@ class ObsidianDuplicateError(Exception):
 class ObsidianAdapter(ABC):
     """
     Abstract adapter for the company's Obsidian knowledge base.
-
-    Implementations must never assume a specific vault schema, folder structure,
-    or proprietary API — those details belong in the concrete class.
     """
 
     @abstractmethod
@@ -70,12 +63,10 @@ class ObsidianAdapter(ABC):
         self,
         query: str,
         filters: dict[str, Any] | None = None,
+        task_scope: TaskScope | None = None,
     ) -> list[MemoryResult]:
         """
         Search the knowledge base for notes relevant to *query*.
-
-        Returns an empty list if nothing is found.
-        Must never raise on an empty result — raise only on adapter failure.
         """
         ...
 
@@ -83,9 +74,6 @@ class ObsidianAdapter(ABC):
     async def read(self, note_id: str) -> MemoryResult | None:
         """
         Read a specific note by its ID/path.
-
-        Returns None if the note does not exist.
-        Raises ObsidianAdapterError on adapter/IO failure.
         """
         ...
 
@@ -105,10 +93,6 @@ class ObsidianAdapter(ABC):
     ) -> str:
         """
         Write *content* to *target_note*.
-
-        Returns the note ID of the written note.
-        Raises ObsidianDuplicateError if the note already exists and
-        overwrite is not permitted.
         """
         ...
 
@@ -116,9 +100,6 @@ class ObsidianAdapter(ABC):
     async def update(self, note_id: str, content: str) -> bool:
         """
         Update an existing note.
-
-        Returns True on success.
-        Raises ObsidianAdapterError if the note does not exist.
         """
         ...
 
@@ -136,12 +117,25 @@ def _tokenize(text: str) -> list[str]:
 
 def _simple_relevance(query: str, content: str, title: str) -> float:
     """Deterministic keyword-based relevance scoring for mock adapter."""
-    query_terms = set(query.lower().split())
-    text = (title + " " + content).lower()
+    raw_terms = _tokenize(query)
+    query_terms = [t for t in raw_terms if t not in _STOPWORDS and t not in _GENERIC_CLAUSE_TOKENS]
+    if not query_terms:
+        query_terms = raw_terms
     if not query_terms:
         return 0.0
+    text = (title + " " + content).lower()
     matches = sum(1 for term in query_terms if term in text)
-    return round(min(matches / len(query_terms), 1.0), 4)
+
+    # Require multi-token match for compound queries
+    if len(query_terms) >= 3 and matches < 2:
+        return 0.0
+    if len(query_terms) >= 2 and matches < 1:
+        return 0.0
+
+    coverage = matches / len(query_terms)
+    if coverage < 0.30:
+        return 0.0
+    return round(min(coverage, 1.0), 4)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -161,22 +155,20 @@ _STOPWORDS = {
     "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so",
     "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now",
     "want", "need", "build", "create", "make", "implement", "application", "system",
-    "platform", "solution", "project", "company", "client", "modern", "complete",
+    "platform", "solution", "project", "client", "modern", "complete",
     "proper", "comprehensive", "requires", "require", "provides", "provide",
     "instructions", "instruction", "guide", "guidelines", "manual", "tutorial",
-    "method", "methods", "steps", "details", "information", "info", "overview", "like"
+    "method", "methods", "steps", "details", "information", "info", "like"
 }
 
-
-_GENERIC_CLAUSE_TOKENS = {"web", "application", "platform", "solution", "system", "service", "services", "software", "app"}
+_GENERIC_CLAUSE_TOKENS = {"web", "application", "platform", "solution", "system", "service", "services", "software", "app", "creative"}
 
 
 def _decompose_query(query: str) -> list[str]:
     """
     Decompose a natural-language client requirement into distinct sub-intents.
-    Splits on punctuation, coordinating conjunctions, and prepositions.
     """
-    delimiters = r"[,;\.\n]| and | with | using | for | including | such as | as well as | plus | over | via | across "
+    delimiters = r"[,;.\n]| and | with | including | such as | as well as | plus "
     clauses = re.split(delimiters, query, flags=re.IGNORECASE)
 
     sub_intents: list[str] = []
@@ -198,7 +190,7 @@ class _ParsedNote:
     """Internal representation of a parsed local Obsidian markdown document."""
 
     def __init__(self, rel_path: str, abs_path: str, raw_content: str) -> None:
-        self.rel_path = rel_path.replace("\\", "/")
+        self.rel_path = rel_path.replace(chr(92), "/")
         self.abs_path = abs_path
         self.raw_content = raw_content
         self.body = raw_content
@@ -210,6 +202,7 @@ class _ParsedNote:
         self.category: str = ""
         self.doc_type: str = ""
         self.is_index_doc: bool = False
+        self.is_company_note: bool = False
         self.updated_at: datetime = datetime.now(timezone.utc)
         self._parse()
 
@@ -258,13 +251,13 @@ class _ParsedNote:
             if it not in self.tags:
                 self.tags.append(it)
 
-        # Precompute title tokens and lowercased tags
+        # Precompute tokens
         self.title_lower = self.title.lower()
         self.title_tokens = set(_tokenize(self.title))
         self.tag_lowers = [t.lower() for t in self.tags]
         self.body_lower = self.body.lower()
 
-        # 5. Identify whether this is an Index / Glossary / Overview document
+        # 5. Check if Index doc
         t_low = self.title_lower
         p_low = self.rel_path.lower()
         self.is_index_doc = (
@@ -281,6 +274,21 @@ class _ParsedNote:
             or p_low.startswith("00-")
             or p_low.startswith("99-")
         )
+
+        # 6. Check if Company / Lordminds specific note
+        self.is_company_note = (
+            p_low.startswith("company/")
+            or "/company/" in p_low
+            or "lordminds" in p_low
+            or "lordminds" in t_low
+            or "lordminds" in [t.lower() for t in self.tags]
+        )
+
+        # 7. Check if raw web-scrape (research/ folder — scraped external web content).
+        # These are NOT structured knowledge notes and must not appear in
+        # specialized-domain queries (automotive, agricultural, healthcare, etc.)
+        # unless they actually contain domain-specific structured content.
+        self.is_raw_scrape = p_low.startswith("research/") or "/research/" in p_low
 
 
 class _LocalInvertedIndex:
@@ -338,6 +346,7 @@ class _LocalInvertedIndex:
         self,
         query: str,
         filters: dict[str, Any] | None = None,
+        task_scope: TaskScope | None = None,
     ) -> list[tuple[float, _ParsedNote]]:
         q_clean = query.strip()
         if not q_clean:
@@ -351,7 +360,12 @@ class _LocalInvertedIndex:
         k1 = 1.2
         b = 0.75
 
-        # Retrieve candidate document IDs
+        # Extract content tokens
+        content_tokens = [t for t in q_tokens if t not in _STOPWORDS and t not in _GENERIC_CLAUSE_TOKENS]
+        if not content_tokens:
+            content_tokens = [t for t in q_tokens if t not in _STOPWORDS] or q_tokens
+
+        # Candidate IDs
         candidate_ids: set[int] = set()
         for t in q_tokens:
             candidate_ids.update(self.title_index.get(t, []))
@@ -363,7 +377,91 @@ class _LocalInvertedIndex:
         for doc_id in candidate_ids:
             note = self.notes[doc_id]
 
-            # ── Apply filters ──────────────────────────────────────────
+            # ── 1. ENTITY DISAMBIGUATION GATE ────────────────────────
+            if note.is_company_note:
+                if task_scope and task_scope.domain in {"e-commerce", "social_media_advertising", "healthcare", "quantum_computing"} and task_scope.entity != "Lordminds":
+                    continue
+                elif not task_scope and any(kw in q_lower for kw in ("e-commerce", "ecommerce", "instagram", "tiktok", "quantum")):
+                    continue
+
+            # ── 1b. RAW SCRAPE GATE ───────────────────────────────────
+            # Notes in research/ are raw external web-page dumps, not structured knowledge.
+            # They must NOT appear in general or specialized-domain query results unless
+            # they are specifically related to an approved research note (e.g. company info).
+            # Company-approved research notes (like Lordminds-Location.md) are in Company/
+            # not in research/, so this gate is safe.
+            # The minimum score for raw scrapes to appear is enforced in the merge step.
+            # Here we perform an early pass: if the task domain is SPECIALIZED, block them
+            # entirely; for other queries they are allowed but with a high score threshold
+            # applied later in the merge step.
+            if note.is_raw_scrape:
+                if task_scope and task_scope.domain in {
+                    "automotive", "agriculture", "fintech", "quantum_computing", "healthcare"
+                }:
+                    continue
+                # For general queries, still allow but with a BM25 score floor applied later
+
+
+            # ── 2. DOMAIN RELEVANCE GATE ─────────────────────────────
+            # Specialized non-web domains (automotive, agriculture, healthcare etc.)
+            # require STRICT domain evidence — not just a single incidental body mention.
+            # Raw web scrapes in research/ are NEVER returned for specialized domains.
+            _STRICT_DOMAIN_REQUIRED = {
+                "automotive", "agriculture", "fintech", "quantum_computing",
+            }
+            if task_scope and task_scope.domain:
+                dom_name = task_scope.domain
+                dom_terms = set(_tokenize(dom_name.replace("_", " "))) - _STOPWORDS - _GENERIC_CLAUSE_TOKENS
+
+                # Also collect the actual query tokens for automotive/agriculture/etc.
+                # These domains have very specific technical vocabulary derived from the query itself.
+                _SPECIALIZED_DOMAIN_QUERY_TOKENS: dict[str, list[str]] = {
+                    "automotive": ["engine", "camshaft", "gearbox", "transmission", "caliper", "piston", "brake", "automotive"],
+                    "agriculture": ["hydroponic", "mycorrhizae", "crop", "greenhouse", "wheat", "soil", "nutrient", "fungal", "tomato"],
+                    "healthcare": ["pharmaceutical", "dosage", "clinical", "cardiac", "sedation", "intubation", "resuscitation", "pediatric"],
+                    # "computing" is included so that legitimately-written notes titled
+                    # "quantum-computing-..." pass the gate via title_tokens (quantum + computing = 2 hits).
+                    "quantum_computing": ["qubit", "superposition", "entanglement", "quantum", "computing"],
+                }
+                specialized_query_tokens = _SPECIALIZED_DOMAIN_QUERY_TOKENS.get(dom_name, [])
+
+                if dom_name in _STRICT_DOMAIN_REQUIRED:
+                    tf_map = self.term_freqs[doc_id]
+
+                    # Raw web scrapes must never appear in specialized domain results
+                    if note.is_raw_scrape:
+                        continue
+
+                    # Require 2+ distinct specialized domain tokens in the document body
+                    # (title, tags, or body TF) — one incidental mention is not enough
+                    if specialized_query_tokens:
+                        domain_token_hits = sum(
+                            1 for dt in specialized_query_tokens
+                            if dt in note.title_tokens
+                            or dt in note.tag_lowers
+                            or tf_map.get(dt, 0) >= 2  # must appear at least twice in body
+                        )
+                        if domain_token_hits < 2:
+                            continue
+                    elif dom_terms:
+                        dom_match_count = sum(
+                            1 for dt in dom_terms
+                            if dt in note.title_tokens or dt in note.tag_lowers or tf_map.get(dt, 0) >= 2
+                        )
+                        if dom_match_count == 0:
+                            continue
+                else:
+                    # Standard (less strict) domain gate for web/software/general domains
+                    if dom_terms:
+                        tf_map = self.term_freqs[doc_id]
+                        dom_match = any(
+                            dt in note.title_tokens or dt in note.tag_lowers or tf_map.get(dt, 0) > 0
+                            for dt in dom_terms
+                        )
+                        if not dom_match:
+                            continue
+
+            # ── 2. Filters ──────────────────────────────────────────
             if filters:
                 if "tags" in filters:
                     req_tags = set(t.lower().lstrip("#") for t in filters["tags"])
@@ -371,7 +469,7 @@ class _LocalInvertedIndex:
                     if not req_tags.issubset(doc_tags):
                         continue
                 if "folder" in filters:
-                    folder_filter = filters["folder"].replace("\\", "/").rstrip("/")
+                    folder_filter = filters["folder"].replace(chr(92), "/").rstrip("/")
                     if not note.rel_path.startswith(folder_filter):
                         continue
                 if "category" in filters:
@@ -381,39 +479,47 @@ class _LocalInvertedIndex:
                     if filters["type"].lower() != note.doc_type.lower():
                         continue
 
-            # Check query token coverage across the document
-            content_tokens = [t for t in q_tokens if t not in _STOPWORDS] or q_tokens
-            doc_all_tokens = note.title_tokens | set(note.tag_lowers)
+            # Token coverage check across document
             tf_map = self.term_freqs[doc_id]
+            doc_all_tokens = note.title_tokens | set(note.tag_lowers)
             matched_q_tokens = sum(1 for t in content_tokens if t in doc_all_tokens or tf_map.get(t, 0) > 0)
-            token_coverage = matched_q_tokens / len(content_tokens)
+            token_coverage = matched_q_tokens / max(len(content_tokens), 1)
 
             q_token_set = set(content_tokens)
-            is_title_match = (q_lower == note.title_lower) or (q_lower in note.title_lower) or (note.title_tokens and note.title_tokens.issubset(q_token_set))
+            is_title_match = (
+                (q_lower == note.title_lower)
+                or (q_lower in note.title_lower)
+                or (note.title_tokens and note.title_tokens.issubset(q_token_set))
+            )
             has_phrase_match = (q_lower in note.title_lower) or (q_lower in note.body_lower)
-            if len(content_tokens) >= 2 and not has_phrase_match and not is_title_match and token_coverage < 0.5:
-                continue
+
+            # Require substantive token coverage (prevents single-word noise hits on negative domain queries)
+            if len(content_tokens) >= 3 and not has_phrase_match and not is_title_match:
+                if matched_q_tokens < 2 or token_coverage < 0.35:
+                    continue
+            elif len(content_tokens) >= 2 and not has_phrase_match and not is_title_match:
+                if token_coverage < 0.40:
+                    continue
 
             score = 0.0
 
-            # 1. Title match boost
+            # Title match boost
             if q_lower == note.title_lower:
                 score += 50.0
             elif q_lower in note.title_lower:
                 score += 30.0
             elif is_title_match:
-                # Full title appears within query (e.g. "Frontend" in "responsive frontend interface")
                 score += 35.0
             else:
-                matched_title = sum(1 for t in q_tokens if t in note.title_tokens)
+                matched_title = sum(1 for t in content_tokens if t in note.title_tokens)
                 if matched_title > 0:
-                    score += (matched_title / len(q_tokens)) * 15.0
+                    score += (matched_title / len(content_tokens)) * 20.0
 
-            # 2. Exact phrase in body
+            # Exact phrase in body
             if q_lower in note.body_lower:
                 score += 10.0
 
-            # 4. Heading matches
+            # Heading matches
             for h_lower, h_tokens in zip(note.heading_lowers, note.heading_tokens):
                 if q_lower == h_lower:
                     score += 12.0
@@ -421,37 +527,37 @@ class _LocalInvertedIndex:
                 elif q_lower in h_lower:
                     score += 8.0
                     break
-                elif all(t in h_tokens for t in q_tokens):
-                    score += 6.0
+                elif any(t in h_tokens for t in content_tokens):
+                    score += 4.0
                     break
 
-            # 5. Tag matches
+            # Tag matches
             for tag_lower in note.tag_lowers:
                 if q_lower == tag_lower:
-                    score += 8.0
+                    score += 10.0
                     break
-                elif q_lower in tag_lower:
+                elif any(t in tag_lower for t in content_tokens):
                     score += 5.0
                     break
 
-            # 6. BM25 scoring on body tokens
+            # BM25 scoring on body tokens
             doc_len = self.doc_lengths[doc_id]
-            for t in q_tokens:
+            for t in content_tokens:
                 tf = tf_map.get(t, 0)
                 if tf > 0:
                     idf = self.idfs.get(t, 1.0)
                     bm25_tf = (tf * (k1 + 1)) / (
                         tf + k1 * (1 - b + b * (doc_len / (self.avg_doc_len or 1)))
                     )
-                    score += idf * bm25_tf * 0.5
+                    score += idf * bm25_tf * 1.0
 
-            # Quality threshold to filter out weak irrelevant token hits
-            if score >= 5.0:
-                # Down-rank broad Index/Glossary/Audit documents
+            # Quality threshold
+            if score >= 6.0:
                 if note.is_index_doc:
                     score *= 0.20
-                norm_score = min(round(score / 50.0, 4), 1.0)
-                scored.append((norm_score, note))
+                norm_score = min(round(score / 40.0, 4), 1.0)
+                if norm_score >= 0.15:
+                    scored.append((norm_score, note))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored
@@ -460,44 +566,60 @@ class _LocalInvertedIndex:
         self,
         query: str,
         filters: dict[str, Any] | None = None,
+        task_scope: TaskScope | None = None,
     ) -> list[tuple[float, _ParsedNote]]:
-        # 1. Search with full query
-        main_results = self._score_single_intent(query, filters)
+        main_results = self._score_single_intent(query, filters, task_scope)
 
-        # 2. Decompose query into sub-intents
         sub_intents = _decompose_query(query)
-
-        # If not a compound query, return main results directly
         if len(sub_intents) <= 1:
             return main_results
 
-        # 3. Retrieve matches for each detected sub-intent
+        # For truly specialized, non-web domains (automotive, agriculture, healthcare),
+        # pass task_scope to sub-intents so domain gates are fully enforced.
+        # For all other domains (e-commerce, web, general), sub-intents must use
+        # task_scope=None to allow general web/software knowledge (Frontend, Backend,
+        # Database, Auth etc.) to be retrieved — e-commerce IS a web application domain.
+        # Raw-scrape blocking is enforced separately in the merge step.
+        _STRICT_SUB_INTENT_DOMAINS = {
+            "automotive", "agriculture", "healthcare",
+        }
+        dom = (task_scope.domain or "") if task_scope else ""
+        sub_intent_scope = task_scope if dom in _STRICT_SUB_INTENT_DOMAINS else None
+
         sub_matches: list[list[tuple[float, _ParsedNote]]] = []
         for sub_q in sub_intents:
-            sub_res = self._score_single_intent(sub_q, filters)
+            sub_res = self._score_single_intent(sub_q, filters, sub_intent_scope)
             if sub_res:
                 sub_matches.append(sub_res)
 
-        # 4. Interleave top non-index hits from each distinct sub-intent (round-robin)
         seen_paths: set[str] = set()
         merged: list[tuple[float, _ParsedNote]] = []
+
+        # Raw web-scrape notes (research/ folder) must only appear if they score
+        # sufficiently high on their OWN merit — not because a sub-intent happened
+        # to match some incidental term in a 150KB LinkedIn dump.
+        _MIN_SCRAPE_SCORE = 0.50
 
         max_depth = max((len(r) for r in sub_matches), default=0)
         for depth in range(min(max_depth, 3)):
             for sub_res in sub_matches:
                 if depth < len(sub_res):
                     score, note = sub_res[depth]
-                    if not note.is_index_doc and note.rel_path not in seen_paths:
+                    if note.is_index_doc:
+                        continue
+                    if note.is_raw_scrape and score < _MIN_SCRAPE_SCORE:
+                        continue
+                    if note.rel_path not in seen_paths:
                         merged.append((score, note))
                         seen_paths.add(note.rel_path)
 
-        # Then add remaining specific main results
         for score, note in main_results:
             if not note.is_index_doc and note.rel_path not in seen_paths:
+                if note.is_raw_scrape and score < _MIN_SCRAPE_SCORE:
+                    continue
                 merged.append((score, note))
                 seen_paths.add(note.rel_path)
 
-        # Finally append any index results if needed
         for score, note in main_results:
             if note.is_index_doc and note.rel_path not in seen_paths:
                 merged.append((score, note))
@@ -514,10 +636,6 @@ class _LocalInvertedIndex:
 class LocalObsidianAdapter(ObsidianAdapter):
     """
     Production-ready Local Obsidian Vault Adapter.
-
-    Recursively discovers markdown files (.md) from the local vault directory,
-    parses YAML frontmatter, headings, tags, and wikilinks, and performs
-    high-speed, metadata-boosted lexical retrieval.
     """
 
     def __init__(self, vault_path: str | Path | None = None) -> None:
@@ -527,12 +645,10 @@ class LocalObsidianAdapter(ObsidianAdapter):
         self.reindex()
 
     def _resolve_vault_path(self, raw_path: str | Path | None) -> Path:
-        """Resolve vault path, with robust fallback detection."""
         candidates = []
         if raw_path:
             candidates.append(Path(raw_path))
 
-        # Common defaults relative to current working directory and module
         base_dir = Path(__file__).resolve().parent.parent.parent
         candidates.extend([
             base_dir / "obsedian",
@@ -552,25 +668,22 @@ class LocalObsidianAdapter(ObsidianAdapter):
             p.mkdir(parents=True, exist_ok=True)
             return p.resolve()
 
-        # Fallback to creating local obsidian dir
         default_p = base_dir / "obsidian"
         default_p.mkdir(parents=True, exist_ok=True)
         return default_p.resolve()
 
     def reindex(self) -> int:
-        """Scan vault directory and rebuild the inverted search index."""
         parsed_notes: list[_ParsedNote] = []
         if not self.vault_path.exists():
             raise ObsidianAdapterError(f"Vault directory does not exist: {self.vault_path}")
 
         for root, dirs, files in os.walk(self.vault_path):
-            # Exclude hidden directories and system artifacts
             dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__MACOSX"]
             for f in files:
                 if not f.endswith(".md") or f.startswith("."):
                     continue
                 abs_path = os.path.join(root, f)
-                rel_path = os.path.relpath(abs_path, self.vault_path).replace("\\", "/")
+                rel_path = os.path.relpath(abs_path, self.vault_path).replace(chr(92), "/")
                 try:
                     with open(abs_path, "r", encoding="utf-8", errors="ignore") as file_handle:
                         content = file_handle.read()
@@ -605,9 +718,10 @@ class LocalObsidianAdapter(ObsidianAdapter):
         self,
         query: str,
         filters: dict[str, Any] | None = None,
+        task_scope: TaskScope | None = None,
     ) -> list[MemoryResult]:
         try:
-            results = self._index.search(query, filters)
+            results = self._index.search(query, filters, task_scope)
             return [self._to_memory_result(note, query, score) for score, note in results]
         except Exception as exc:
             logger.error("LocalObsidianAdapter search failed: %s", exc)
@@ -615,23 +729,20 @@ class LocalObsidianAdapter(ObsidianAdapter):
 
     async def read(self, note_id: str) -> MemoryResult | None:
         try:
-            clean_id = note_id.replace("\\", "/").strip().lstrip("/")
+            clean_id = note_id.replace(chr(92), "/").strip().lstrip("/")
             if clean_id in self._index.doc_map:
                 note = self._index.doc_map[clean_id]
                 return self._to_memory_result(note, "", 1.0)
 
-            # Try with .md extension
             if not clean_id.endswith(".md") and f"{clean_id}.md" in self._index.doc_map:
                 note = self._index.doc_map[f"{clean_id}.md"]
                 return self._to_memory_result(note, "", 1.0)
 
-            # Try matching by title
             clean_lower = clean_id.lower()
             if clean_lower in self._index.title_map:
                 note = self._index.title_map[clean_lower]
                 return self._to_memory_result(note, "", 1.0)
 
-            # Try by filename
             for rel, note in self._index.doc_map.items():
                 if Path(rel).name == clean_id or Path(rel).stem == clean_id:
                     return self._to_memory_result(note, "", 1.0)
@@ -644,7 +755,7 @@ class LocalObsidianAdapter(ObsidianAdapter):
     async def list_notes(self, folder: str | None = None) -> list[str]:
         try:
             if folder:
-                clean_folder = folder.replace("\\", "/").rstrip("/") + "/"
+                clean_folder = folder.replace(chr(92), "/").rstrip("/") + "/"
                 return [n.rel_path for n in self._notes if n.rel_path.startswith(clean_folder)]
             return [n.rel_path for n in self._notes]
         except Exception as exc:
@@ -657,7 +768,7 @@ class LocalObsidianAdapter(ObsidianAdapter):
         metadata: dict[str, Any] | None = None,
     ) -> str:
         try:
-            clean_target = target_note.replace("\\", "/").strip().lstrip("/")
+            clean_target = target_note.replace(chr(92), "/").strip().lstrip("/")
             if not clean_target.endswith(".md"):
                 clean_target = f"{clean_target}.md"
 
@@ -669,7 +780,6 @@ class LocalObsidianAdapter(ObsidianAdapter):
 
             target_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # Format frontmatter if metadata provided
             file_content = content
             if metadata:
                 fm_dict: dict[str, Any] = {
@@ -690,7 +800,6 @@ class LocalObsidianAdapter(ObsidianAdapter):
             with open(target_file, "w", encoding="utf-8") as f:
                 f.write(file_content)
 
-            # Update index
             self.reindex()
             return clean_target
         except ObsidianDuplicateError:
@@ -701,7 +810,7 @@ class LocalObsidianAdapter(ObsidianAdapter):
 
     async def update(self, note_id: str, content: str) -> bool:
         try:
-            clean_id = note_id.replace("\\", "/").strip().lstrip("/")
+            clean_id = note_id.replace(chr(92), "/").strip().lstrip("/")
             if not clean_id.endswith(".md"):
                 clean_id = f"{clean_id}.md"
 
@@ -731,19 +840,19 @@ _SEED_NOTES: dict[str, dict[str, Any]] = {
         "content": (
             "# Autonomous AI Workforce — Architecture Overview\n\n"
             "## Control Loop\n"
-            "USER INPUT → PERCEPTION → MODE SELECTOR → MASTER ORCHESTRATOR → "
-            "MEMORY + PLANNER → CAPABILITY MANAGER → GUARDRAIL → TWIN / SPECIALIST → "
-            "EXECUTION → OBSERVATION → VERIFICATION.\n\n"
+            "USER INPUT -> PERCEPTION -> MODE SELECTOR -> MASTER ORCHESTRATOR -> "
+            "MEMORY + PLANNER -> CAPABILITY MANAGER -> GUARDRAIL -> TWIN / SPECIALIST -> "
+            "EXECUTION -> OBSERVATION -> VERIFICATION.\n\n"
             "## Operating Modes\n"
-            "- **Basic Mode**: Fast direct assistance. "
-            "Input → Perception → Capability → Security → Execution → Verification → Output.\n"
-            "- **Advanced Project Mode**: Complex multi-step projects. "
-            "Input → Project Initialization → Orchestrator → Memory → Planner → "
-            "Capability Manager → Security → Workforce → Execution → Verification → "
-            "Reflection/Re-plan → Walkthrough → Memory.\n\n"
+            "- Basic Mode: Fast direct assistance. "
+            "Input -> Perception -> Capability -> Security -> Execution -> Verification -> Output.\n"
+            "- Advanced Project Mode: Complex multi-step projects. "
+            "Input -> Project Initialization -> Orchestrator -> Memory -> Planner -> "
+            "Capability Manager -> Security -> Workforce -> Execution -> Verification -> "
+            "Reflection/Re-plan -> Walkthrough -> Memory.\n\n"
             "## Memory Architecture\n"
-            "Memory Agent → Internal Obsidian + Controlled External Research → "
-            "Evidence Validation → Approved Knowledge → Obsidian.\n"
+            "Memory Agent -> Internal Obsidian + Controlled External Research -> "
+            "Evidence Validation -> Approved Knowledge -> Obsidian.\n"
             "External research must not become trusted company memory merely because "
             "a model retrieved it."
         ),
@@ -829,10 +938,6 @@ _SEED_NOTES: dict[str, dict[str, Any]] = {
 class MockObsidianAdapter(ObsidianAdapter):
     """
     In-memory Obsidian adapter for development and isolated unit testing.
-
-    Seeded with realistic company knowledge notes.
-    Supports search, read, list, write, and update operations against
-    an in-memory store.
     """
 
     def __init__(self, simulate_failure: bool = False) -> None:
@@ -863,13 +968,23 @@ class MockObsidianAdapter(ObsidianAdapter):
         self,
         query: str,
         filters: dict[str, Any] | None = None,
+        task_scope: TaskScope | None = None,
     ) -> list[MemoryResult]:
         self._raise_if_failing()
 
         results: list[MemoryResult] = []
         for note_id, note in self._store.items():
+            is_company = (
+                note_id.startswith("company/")
+                or note.get("folder") == "company"
+                or "lordminds" in note["title"].lower()
+            )
+            if is_company and task_scope:
+                if task_scope.domain in {"e-commerce", "social_media_advertising", "healthcare", "quantum_computing"} and task_scope.entity != "Lordminds":
+                    continue
+
             relevance = _simple_relevance(query, note["content"], note["title"])
-            if relevance > 0.0:
+            if relevance >= 0.15:
                 result = self._to_memory_result(note_id, note, query)
                 result.relevance = relevance
                 results.append(result)

@@ -76,16 +76,21 @@ async def search_memory(
 ) -> SearchResponse:
     """
     Search the internal Obsidian/company knowledge base.
-
-    Returns matching MemoryResults with source information and relevance scores.
-    If found=False, knowledge is unavailable — consider calling /research.
+    If auto_research=True and knowledge gaps exist, automatically research, validate,
+    write to Obsidian, and return enriched knowledge.
     """
     try:
+        if body.auto_research:
+            return await agent.search_or_research(
+                query=body.query,
+                task_id=body.task_id,
+            )
         return await agent.search(
             query=body.query,
             task_id=body.task_id,
             context=body.context,
             filters=body.filters or None,
+            task_scope=body.task_scope,
         )
     except MemoryAgentError as exc:
         logger.error("api.memory.search.error", extra={"error": str(exc)})
@@ -117,12 +122,13 @@ async def research_memory(
 ) -> ResearchResponse:
     """
     Initiate controlled external research.
-
-    All returned evidence is marked UNVERIFIED.
-    Evidence must be validated via /validate before it can be written via /write.
     """
     try:
-        return await agent.research(query=body.query, task_id=body.task_id)
+        return await agent.research(
+            query=body.query,
+            task_id=body.task_id,
+            task_scope=body.task_scope,
+        )
     except ResearchError as exc:
         logger.warning("api.memory.research.error", extra={"error": str(exc)})
         if "timed out" in str(exc).lower():
@@ -158,9 +164,6 @@ async def validate_memory(
 ) -> ValidateResponse:
     """
     Validate a list of evidence items using deterministic rules.
-
-    Returns an approval decision. Only APPROVED evidence may be written via /write.
-    A model saying "this is correct" is not sufficient — rules are applied here.
     """
     try:
         result = agent.validate(
@@ -198,12 +201,8 @@ async def write_memory(
 ) -> WriteResponse:
     """
     Write approved content to the Obsidian knowledge base.
-
-    Rejects any write where approvalStatus is not 'approved'.
-    Returns status='rejected' with a reason for non-approved writes.
     """
     try:
-        # Normalise the approval_status enum value
         try:
             approval = ApprovalStatus(body.approval_status)
         except ValueError:
@@ -251,9 +250,6 @@ async def get_context(
 ) -> ContextResponse:
     """
     Return all cached memory context for the given task ID.
-
-    If no context has been stored for this task, returns an empty list.
-    Never fabricates context — RULE 7.
     """
     try:
         return await agent.retrieve_context(taskId)

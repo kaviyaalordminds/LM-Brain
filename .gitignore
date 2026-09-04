@@ -67,7 +67,7 @@ coverage.xml
 *~
 
 # Local model/cache/runtime data
-models/
+/models/
 model-cache/
 cache/
 tmp/
@@ -83,5 +83,4 @@ tmp/
 # Irrelevant / Reference artifacts
 .agents/
 Autonomous_AI_Workforce_*.pdf
-
-
+generate_pdf_report.py
