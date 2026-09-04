@@ -94,8 +94,8 @@ class RetrievalService:
         task_scope: TaskScope | None,
     ) -> list[KnowledgeGapItem]:
         """
-        Evaluate each requirement in task_scope against assembled results.
-        Enforces that core domain tokens must match for a requirement to be satisfied.
+        Evaluate each requirement in task_scope against assembled results using section-level chunk evidence.
+        Co-occurrence within the same section or paragraph is required for genuine technical satisfaction.
         """
         if not task_scope or not task_scope.requirements:
             return []
@@ -103,52 +103,74 @@ class RetrievalService:
         gaps: list[KnowledgeGapItem] = []
         for req in task_scope.requirements:
             req_clean = req.lower()
-            tokens = re.findall(r"[a-zA-Z0-9]+", req_clean)
-            req_tokens = [t for t in tokens if len(t) > 2 and t not in _STOPWORDS]
+            tokens = re.findall(r"[a-zA-Z0-9_\-]+", req_clean)
+            req_tokens = [t for t in tokens if len(t) > 2 and t not in _STOPWORDS and t not in _GENERIC_REQ_TOKENS]
             if not req_tokens:
-                req_tokens = [t for t in tokens if len(t) > 1]
+                req_tokens = [t for t in tokens if len(t) > 1 and t not in _STOPWORDS]
 
-            core_domain_tokens = [t for t in req_tokens if t not in _GENERIC_REQ_TOKENS]
-
-            matched_note: str | None = None
             best_rel = 0.0
+            matched_note: str | None = None
+            best_excerpt: str | None = None
+            best_section: str | None = None
 
             for res in results:
-                content_lower = (res.content or "").lower()
-                source_lower = (res.source_note or "").lower()
-                doc_text = f"{source_lower} {content_lower}"
+                content = res.content or ""
+                sections = re.split(r"\n(?=#{1,4}\s+)", content)
+                if not sections or (len(sections) == 1 and not sections[0].strip().startswith("#")):
+                    sections = content.split("\n\n")
 
-                # Enforce core domain term match
-                if core_domain_tokens:
-                    core_matched = sum(1 for ct in core_domain_tokens if ct in doc_text)
-                    if core_matched == 0:
+                for sec in sections:
+                    sec_clean = sec.strip()
+                    if not sec_clean or len(sec_clean) < 20:
                         continue
 
-                matches = sum(1 for t in req_tokens if t in doc_text)
-                rel = matches / max(len(req_tokens), 1)
+                    sec_lower = sec_clean.lower()
+                    sec_token_matches = sum(1 for t in req_tokens if t in sec_lower)
+                    if sec_token_matches == 0:
+                        continue
 
-                if rel > best_rel:
-                    best_rel = rel
-                    matched_note = res.source_note or (res.sources[0] if res.sources else None)
+                    sec_cov = sec_token_matches / max(len(req_tokens), 1)
+                    phrase_match = any(
+                        f"{req_tokens[i]} {req_tokens[i+1]}" in sec_lower
+                        for i in range(len(req_tokens) - 1)
+                    )
 
-            if best_rel >= 0.40:
+                    if len(req_tokens) >= 3 and sec_token_matches < 2 and not phrase_match:
+                        continue
+                    if len(req_tokens) >= 2 and sec_token_matches < 2 and not phrase_match:
+                        continue
+
+                    sec_score = sec_cov * (1.2 if phrase_match else 1.0)
+                    sec_score = min(round(sec_score, 2), 1.0)
+
+                    if sec_score > best_rel:
+                        best_rel = sec_score
+                        matched_note = res.source_note or (res.sources[0] if res.sources else None)
+                        first_lines = [l.strip() for l in sec_clean.splitlines() if l.strip() and not l.startswith("#")]
+                        best_excerpt = first_lines[0][:150] if first_lines else sec_clean[:150]
+                        first_h = [l.strip().lstrip("#").strip() for l in sec_clean.splitlines() if l.strip().startswith("#")]
+                        best_section = first_h[0] if first_h else "Content Body"
+
+            if best_rel >= 0.55:
                 gaps.append(
                     KnowledgeGapItem(
                         requirement=req,
                         status="satisfied",
                         matched_note=matched_note,
-                        relevance=round(best_rel, 2),
-                        reason=f"Satisfied by vault note '{matched_note}' (match confidence: {int(best_rel * 100)}%)",
+                        relevance=best_rel,
+                        reason=f"Satisfied by vault note '{matched_note}' in section '{best_section}' (evidence confidence: {int(best_rel * 100)}%)",
+                        evidence_excerpt=best_excerpt,
                     )
                 )
-            elif best_rel >= 0.20:
+            elif best_rel >= 0.30:
                 gaps.append(
                     KnowledgeGapItem(
                         requirement=req,
                         status="partial",
                         matched_note=matched_note,
-                        relevance=round(best_rel, 2),
-                        reason=f"Partially mentioned in '{matched_note}', but lacks dedicated in-depth coverage",
+                        relevance=best_rel,
+                        reason=f"Partially mentioned in '{matched_note}' ({int(best_rel * 100)}% match), but lacks dedicated architecture",
+                        evidence_excerpt=best_excerpt,
                     )
                 )
             else:
@@ -158,7 +180,8 @@ class RetrievalService:
                         status="missing",
                         matched_note=None,
                         relevance=0.0,
-                        reason="No relevant knowledge found in Obsidian vault for this requirement",
+                        reason=f"No relevant knowledge found in Obsidian vault for requirement '{req}'",
+                        evidence_excerpt=None,
                     )
                 )
 

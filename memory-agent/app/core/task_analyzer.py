@@ -130,7 +130,10 @@ class TaskAnalyzer:
                 task_type = t_type
                 break
 
-        # 5. Derive Requirements
+        # 5. Extract Core Discriminators
+        discriminators = TaskAnalyzer._extract_discriminators(query, domain, entity, platform)
+
+        # 6. Derive Requirements
         requirements = TaskAnalyzer._derive_requirements(task_type, domain, entity, platform, query)
 
         return TaskScope(
@@ -138,9 +141,45 @@ class TaskAnalyzer:
             domain=domain,
             entity=entity,
             platform=platform,
+            discriminators=discriminators,
             requirements=requirements,
             raw_query=query,
         )
+
+    @staticmethod
+    def _extract_discriminators(
+        query: str,
+        domain: str | None,
+        entity: str | None,
+        platform: str | None,
+    ) -> list[str]:
+        """
+        Extract key discriminative tokens from query that define the specific subject.
+        Filters out generic intent/filler words (create, build, using, technology, etc.).
+        """
+        _GENERIC_ACTION_WORDS = {
+            "create", "build", "make", "implement", "develop", "design", "need", "want",
+            "using", "used", "use", "with", "for", "technology", "technologies", "tech",
+            "system", "platform", "application", "solution", "project", "client", "modern",
+            "complete", "proper", "an", "a", "the", "my", "our", "in", "to", "of", "and",
+            "is", "it", "at", "by", "as", "or", "on", "from", "creative", "advanced",
+        }
+        tokens = re.findall(r"[a-zA-Z0-9_\-]+", query.lower())
+        discriminators: list[str] = []
+        for t in tokens:
+            clean = t.strip("-")
+            if len(clean) > 1 and clean not in _GENERIC_ACTION_WORDS:
+                if clean not in discriminators:
+                    discriminators.append(clean)
+
+        if entity and entity.lower() not in [d.lower() for d in discriminators]:
+            discriminators.append(entity.lower())
+        if domain and domain.lower() not in [d.lower() for d in discriminators]:
+            discriminators.append(domain.lower())
+        if platform and platform.lower() not in [d.lower() for d in discriminators]:
+            discriminators.append(platform.lower())
+
+        return discriminators
 
     @staticmethod
     def _derive_requirements(

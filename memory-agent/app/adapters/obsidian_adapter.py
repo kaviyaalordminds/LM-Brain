@@ -26,7 +26,13 @@ from typing import Any
 
 import yaml
 
-from app.models.memory import ApprovalStatus, MemoryResult, TaskScope
+from app.models.memory import (
+    ApprovalStatus,
+    MemoryResult,
+    RejectedCandidate,
+    TaskScope,
+    VaultScanStats,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -155,20 +161,27 @@ _STOPWORDS = {
     "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so",
     "than", "too", "very", "s", "t", "can", "will", "just", "don", "should", "now",
     "want", "need", "build", "create", "make", "implement", "application", "system",
-    "platform", "solution", "project", "client", "modern", "complete",
+    "platform", "solution", "project", "modern", "complete",
     "proper", "comprehensive", "requires", "require", "provides", "provide",
     "instructions", "instruction", "guide", "guidelines", "manual", "tutorial",
-    "method", "methods", "steps", "details", "information", "info", "like"
+    "method", "methods", "steps", "details", "information", "info", "like",
+    "using", "used", "use", "technology", "technologies", "tech",
+    "communicates", "communicate", "communicating", "interface", "interfaces"
 }
 
-_GENERIC_CLAUSE_TOKENS = {"web", "application", "platform", "solution", "system", "service", "services", "software", "app", "creative"}
+_GENERIC_CLAUSE_TOKENS = {
+    "web", "website", "web site", "page", "pages", "site", "sites",
+    "application", "applications", "platform", "platforms", "solution", "solutions",
+    "system", "systems", "service", "services", "software", "app", "apps",
+    "creative", "technology", "technologies", "tech", "development", "dev"
+}
 
 
 def _decompose_query(query: str) -> list[str]:
     """
     Decompose a natural-language client requirement into distinct sub-intents.
     """
-    delimiters = r"[,;.\n]| and | with | including | such as | as well as | plus "
+    delimiters = r"[,;.\n]| and | with | over | via | across | including | such as | as well as | plus "
     clauses = re.split(delimiters, query, flags=re.IGNORECASE)
 
     sub_intents: list[str] = []
@@ -203,6 +216,9 @@ class _ParsedNote:
         self.doc_type: str = ""
         self.is_index_doc: bool = False
         self.is_company_note: bool = False
+        self.is_raw_scrape: bool = False
+        self.is_noisy_scrape: bool = False
+        self.chunks: list[dict[str, Any]] = []
         self.updated_at: datetime = datetime.now(timezone.utc)
         self._parse()
 
@@ -254,6 +270,9 @@ class _ParsedNote:
         # Precompute tokens
         self.title_lower = self.title.lower()
         self.title_tokens = set(_tokenize(self.title))
+        self.clean_title = re.sub(r"^\d+[\s\-_]+", "", self.title).replace("-", " ").strip()
+        self.clean_title_lower = self.clean_title.lower()
+        self.clean_title_tokens = set(_tokenize(self.clean_title))
         self.tag_lowers = [t.lower() for t in self.tags]
         self.body_lower = self.body.lower()
 
@@ -285,10 +304,77 @@ class _ParsedNote:
         )
 
         # 7. Check if raw web-scrape (research/ folder — scraped external web content).
-        # These are NOT structured knowledge notes and must not appear in
-        # specialized-domain queries (automotive, agricultural, healthcare, etc.)
-        # unless they actually contain domain-specific structured content.
         self.is_raw_scrape = p_low.startswith("research/") or "/research/" in p_low
+
+        # 8. Check for noisy web / social media scraper dumps
+        _NOISE_SNIPPETS = {
+            "cookie policy", "user agreement", "privacy policy", "report this post",
+            "agree & join linkedin", "skip to main content", "student ambassador scams",
+            "referral numbers", "scanning qr codes", "like reply reactions",
+            "sign in join now"
+        }
+        noise_hits = sum(1 for ns in _NOISE_SNIPPETS if ns in self.body_lower)
+        self.is_noisy_scrape = noise_hits >= 2 or (self.is_raw_scrape and noise_hits >= 1)
+
+        # 9. Build Section Chunks
+        self._build_chunks()
+
+    def _build_chunks(self) -> None:
+        """Split note into coherent section chunks by markdown headings (#, ##, ###) or paragraphs."""
+        chunks: list[dict[str, Any]] = []
+        lines = self.body.splitlines()
+        current_heading = self.title
+        current_lines: list[str] = []
+
+        for line in lines:
+            m = re.match(r"^(#{1,4})\s+(.+)$", line.strip())
+            if m:
+                if current_lines:
+                    chunk_text = "\n".join(current_lines).strip()
+                    if chunk_text:
+                        tokens = _tokenize(chunk_text)
+                        tf_map: dict[str, int] = {}
+                        for t in tokens:
+                            tf_map[t] = tf_map.get(t, 0) + 1
+                        chunks.append({
+                            "heading": current_heading,
+                            "content": chunk_text,
+                            "tokens": set(tokens),
+                            "tf_map": tf_map,
+                            "length": len(tokens),
+                        })
+                    current_lines = []
+                current_heading = m.group(2).strip()
+            else:
+                current_lines.append(line)
+
+        if current_lines:
+            chunk_text = "\n".join(current_lines).strip()
+            if chunk_text:
+                tokens = _tokenize(chunk_text)
+                tf_map = {}
+                for t in tokens:
+                    tf_map[t] = tf_map.get(t, 0) + 1
+                chunks.append({
+                    "heading": current_heading,
+                    "content": chunk_text,
+                    "tokens": set(tokens),
+                    "tf_map": tf_map,
+                    "length": len(tokens),
+                })
+
+        if not chunks:
+            tokens = _tokenize(self.body)
+            tf_map = {t: tokens.count(t) for t in set(tokens)}
+            chunks.append({
+                "heading": self.title,
+                "content": self.body,
+                "tokens": set(tokens),
+                "tf_map": tf_map,
+                "length": len(tokens),
+            })
+
+        self.chunks = chunks
 
 
 class _LocalInvertedIndex:
@@ -324,7 +410,7 @@ class _LocalInvertedIndex:
             for t in tf_map:
                 self.index.setdefault(t, []).append(i)
 
-            for t in n.title_tokens:
+            for t in (n.title_tokens | n.clean_title_tokens):
                 self.title_index.setdefault(t, []).append(i)
 
             for tag in n.tags:
@@ -347,121 +433,91 @@ class _LocalInvertedIndex:
         query: str,
         filters: dict[str, Any] | None = None,
         task_scope: TaskScope | None = None,
-    ) -> list[tuple[float, _ParsedNote]]:
+    ) -> tuple[list[tuple[float, _ParsedNote, str, str, str]], list[RejectedCandidate]]:
         q_clean = query.strip()
         if not q_clean:
-            return []
+            return [], []
 
         q_tokens = _tokenize(q_clean)
         if not q_tokens:
-            return []
+            return [], []
 
         q_lower = q_clean.lower()
         k1 = 1.2
         b = 0.75
 
-        # Extract content tokens
-        content_tokens = [t for t in q_tokens if t not in _STOPWORDS and t not in _GENERIC_CLAUSE_TOKENS]
+        # Content tokens: Non-stopword query tokens (natural BM25 IDF weighting)
+        content_tokens = [t for t in q_tokens if t not in _STOPWORDS]
         if not content_tokens:
-            content_tokens = [t for t in q_tokens if t not in _STOPWORDS] or q_tokens
+            content_tokens = q_tokens
 
         # Candidate IDs
         candidate_ids: set[int] = set()
-        for t in q_tokens:
+        for t in content_tokens:
             candidate_ids.update(self.title_index.get(t, []))
             candidate_ids.update(self.tag_index.get(t, []))
             candidate_ids.update(self.heading_index.get(t, []))
             candidate_ids.update(self.index.get(t, []))
 
-        scored: list[tuple[float, _ParsedNote]] = []
+        raw_accepted: list[tuple[float, float, _ParsedNote, str, str, str]] = []
+        rejected: list[RejectedCandidate] = []
+
         for doc_id in candidate_ids:
             note = self.notes[doc_id]
 
             # ── 1. ENTITY DISAMBIGUATION GATE ────────────────────────
             if note.is_company_note:
-                if task_scope and task_scope.domain in {"e-commerce", "social_media_advertising", "healthcare", "quantum_computing"} and task_scope.entity != "Lordminds":
+                if task_scope and task_scope.entity:
+                    if task_scope.entity.lower() not in note.rel_path.lower() and task_scope.entity.lower() not in note.title_lower:
+                        rejected.append(RejectedCandidate(
+                            source_note=note.rel_path,
+                            title=note.title,
+                            relevance=0.0,
+                            rejection_reason=f"Company note for '{note.title}' excluded because query specifies entity '{task_scope.entity}'"
+                        ))
+                        continue
+                else:
+                    rejected.append(RejectedCandidate(
+                        source_note=note.rel_path,
+                        title=note.title,
+                        relevance=0.0,
+                        rejection_reason="Company-specific knowledge excluded because user request does not specify a company/entity."
+                    ))
                     continue
-                elif not task_scope and any(kw in q_lower for kw in ("e-commerce", "ecommerce", "instagram", "tiktok", "quantum")):
-                    continue
 
-            # ── 1b. RAW SCRAPE GATE ───────────────────────────────────
-            # Notes in research/ are raw external web-page dumps, not structured knowledge.
-            # They must NOT appear in general or specialized-domain query results unless
-            # they are specifically related to an approved research note (e.g. company info).
-            # Company-approved research notes (like Lordminds-Location.md) are in Company/
-            # not in research/, so this gate is safe.
-            # The minimum score for raw scrapes to appear is enforced in the merge step.
-            # Here we perform an early pass: if the task domain is SPECIALIZED, block them
-            # entirely; for other queries they are allowed but with a high score threshold
-            # applied later in the merge step.
-            if note.is_raw_scrape:
-                if task_scope and task_scope.domain in {
-                    "automotive", "agriculture", "fintech", "quantum_computing", "healthcare"
-                }:
-                    continue
-                # For general queries, still allow but with a BM25 score floor applied later
-
-
-            # ── 2. DOMAIN RELEVANCE GATE ─────────────────────────────
-            # Specialized non-web domains (automotive, agriculture, healthcare etc.)
-            # require STRICT domain evidence — not just a single incidental body mention.
-            # Raw web scrapes in research/ are NEVER returned for specialized domains.
-            _STRICT_DOMAIN_REQUIRED = {
-                "automotive", "agriculture", "fintech", "quantum_computing",
-            }
-            if task_scope and task_scope.domain:
-                dom_name = task_scope.domain
-                dom_terms = set(_tokenize(dom_name.replace("_", " "))) - _STOPWORDS - _GENERIC_CLAUSE_TOKENS
-
-                # Also collect the actual query tokens for automotive/agriculture/etc.
-                # These domains have very specific technical vocabulary derived from the query itself.
-                _SPECIALIZED_DOMAIN_QUERY_TOKENS: dict[str, list[str]] = {
-                    "automotive": ["engine", "camshaft", "gearbox", "transmission", "caliper", "piston", "brake", "automotive"],
-                    "agriculture": ["hydroponic", "mycorrhizae", "crop", "greenhouse", "wheat", "soil", "nutrient", "fungal", "tomato"],
-                    "healthcare": ["pharmaceutical", "dosage", "clinical", "cardiac", "sedation", "intubation", "resuscitation", "pediatric"],
-                    # "computing" is included so that legitimately-written notes titled
-                    # "quantum-computing-..." pass the gate via title_tokens (quantum + computing = 2 hits).
-                    "quantum_computing": ["qubit", "superposition", "entanglement", "quantum", "computing"],
-                }
-                specialized_query_tokens = _SPECIALIZED_DOMAIN_QUERY_TOKENS.get(dom_name, [])
-
-                if dom_name in _STRICT_DOMAIN_REQUIRED:
-                    tf_map = self.term_freqs[doc_id]
-
-                    # Raw web scrapes must never appear in specialized domain results
-                    if note.is_raw_scrape:
+            # ── 2. CORE DISCRIMINATOR GATING (XYZABC rule) ─────────────
+            _COMMON_WEBSITE_TYPES = {"portfolio", "personal", "blog", "landing", "portal", "storefront", "creative", "showcase"}
+            if task_scope and task_scope.discriminators:
+                # Extract specific technical discriminators (e.g. 'xyzabc', 'docker', 'redis', 'jwt', 'kubernetes')
+                tech_discriminators = [
+                    d.lower() for d in task_scope.discriminators
+                    if d.lower() not in _GENERIC_CLAUSE_TOKENS
+                    and d.lower() not in _STOPWORDS
+                    and d.lower() not in _COMMON_WEBSITE_TYPES
+                ]
+                if tech_discriminators:
+                    doc_tokens = note.title_tokens | set(note.tag_lowers) | set(self.term_freqs[doc_id].keys())
+                    has_disc_match = any(d in doc_tokens or d in note.body_lower for d in tech_discriminators)
+                    if not has_disc_match:
+                        rejected.append(RejectedCandidate(
+                            source_note=note.rel_path,
+                            title=note.title,
+                            relevance=0.0,
+                            rejection_reason=f"Lacks required technology/discriminator {tech_discriminators} (matching generic terms is insufficient)."
+                        ))
                         continue
 
-                    # Require 2+ distinct specialized domain tokens in the document body
-                    # (title, tags, or body TF) — one incidental mention is not enough
-                    if specialized_query_tokens:
-                        domain_token_hits = sum(
-                            1 for dt in specialized_query_tokens
-                            if dt in note.title_tokens
-                            or dt in note.tag_lowers
-                            or tf_map.get(dt, 0) >= 2  # must appear at least twice in body
-                        )
-                        if domain_token_hits < 2:
-                            continue
-                    elif dom_terms:
-                        dom_match_count = sum(
-                            1 for dt in dom_terms
-                            if dt in note.title_tokens or dt in note.tag_lowers or tf_map.get(dt, 0) >= 2
-                        )
-                        if dom_match_count == 0:
-                            continue
-                else:
-                    # Standard (less strict) domain gate for web/software/general domains
-                    if dom_terms:
-                        tf_map = self.term_freqs[doc_id]
-                        dom_match = any(
-                            dt in note.title_tokens or dt in note.tag_lowers or tf_map.get(dt, 0) > 0
-                            for dt in dom_terms
-                        )
-                        if not dom_match:
-                            continue
+            # ── 3. NOISE / OFF-TOPIC RAW SCRAPE REJECTION ─────────────
+            if note.is_noisy_scrape:
+                rejected.append(RejectedCandidate(
+                    source_note=note.rel_path,
+                    title=note.title,
+                    relevance=0.0,
+                    rejection_reason="Document is an uncurated external marketing/social-media post (contains navigational boilerplate and social media noise), lacking structured technical knowledge."
+                ))
+                continue
 
-            # ── 2. Filters ──────────────────────────────────────────
+            # ── 4. Metadata Filters ──────────────────────────────────
             if filters:
                 if "tags" in filters:
                     req_tags = set(t.lower().lstrip("#") for t in filters["tags"])
@@ -479,153 +535,158 @@ class _LocalInvertedIndex:
                     if filters["type"].lower() != note.doc_type.lower():
                         continue
 
-            # Token coverage check across document
+            # ── 5. CHUNK-LEVEL CONTENT DENSITY SCORING ────────────────
             tf_map = self.term_freqs[doc_id]
             doc_all_tokens = note.title_tokens | set(note.tag_lowers)
             matched_q_tokens = sum(1 for t in content_tokens if t in doc_all_tokens or tf_map.get(t, 0) > 0)
             token_coverage = matched_q_tokens / max(len(content_tokens), 1)
 
+            if len(content_tokens) >= 4 and matched_q_tokens < 2 and token_coverage < 0.30:
+                rejected.append(RejectedCandidate(
+                    source_note=note.rel_path,
+                    title=note.title,
+                    relevance=0.0,
+                    rejection_reason=f"Insufficient token coverage ({token_coverage:.2f}) for compound query."
+                ))
+                continue
+
+            best_chunk_score = 0.0
+            best_chunk_heading = note.title
+            best_chunk_excerpt = ""
+
+            for chunk in note.chunks:
+                ch_tokens = chunk["tokens"]
+                ch_tf = chunk["tf_map"]
+                ch_len = chunk["length"]
+
+                matched_ch_tokens = sum(1 for t in content_tokens if t in ch_tokens)
+                if matched_ch_tokens == 0:
+                    continue
+
+                cov = matched_ch_tokens / max(len(content_tokens), 1)
+
+                ch_score = 0.0
+                for t in content_tokens:
+                    tf = ch_tf.get(t, 0)
+                    if tf > 0:
+                        idf = self.idfs.get(t, 1.0)
+                        bm25_tf = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (ch_len / (self.avg_doc_len or 1))))
+                        ch_score += idf * bm25_tf * 2.0
+
+                # Phrase matches in chunk
+                if q_lower in chunk["content"].lower():
+                    ch_score += 15.0
+
+                # Heading matches
+                if q_lower in chunk["heading"].lower():
+                    ch_score += 8.0
+                elif any(t in chunk["heading"].lower() for t in content_tokens if len(t) > 2):
+                    ch_score += 4.0
+
+                ch_score *= (0.5 + 0.5 * cov)
+
+                if ch_score > best_chunk_score:
+                    best_chunk_score = ch_score
+                    best_chunk_heading = chunk["heading"]
+                    clean_lines = [l.strip() for l in chunk["content"].splitlines() if l.strip() and not l.startswith("#")]
+                    best_chunk_excerpt = clean_lines[0][:150] if clean_lines else chunk["content"][:150]
+
+            final_score = best_chunk_score
+
+            # Title support: add title bonus if content chunk had positive match
+            _GENERIC_MODIFIERS = {"depth", "technical", "manual", "guide", "overview", "basics", "fundamentals", "what", "how", "application", "software", "development"}
+            substantive_tokens = [t for t in content_tokens if t not in _GENERIC_MODIFIERS]
+            if not substantive_tokens:
+                substantive_tokens = content_tokens
+
             q_token_set = set(content_tokens)
+            clean_title_lower = getattr(note, "clean_title_lower", note.title_lower)
+            clean_title_tokens = getattr(note, "clean_title_tokens", note.title_tokens)
+
+            is_exact_title = (
+                (q_lower == clean_title_lower)
+                or (q_lower == note.title_lower)
+                or (clean_title_tokens and clean_title_tokens == set(content_tokens))
+            )
             is_title_match = (
-                (q_lower == note.title_lower)
+                is_exact_title
                 or (q_lower in note.title_lower)
+                or (clean_title_lower in q_lower)
+                or (clean_title_tokens and clean_title_tokens.issubset(q_token_set))
                 or (note.title_tokens and note.title_tokens.issubset(q_token_set))
             )
-            has_phrase_match = (q_lower in note.title_lower) or (q_lower in note.body_lower)
 
-            # Require substantive token coverage (prevents single-word noise hits on negative domain queries)
-            if len(content_tokens) >= 3 and not has_phrase_match and not is_title_match:
-                if matched_q_tokens < 2 or token_coverage < 0.35:
-                    continue
-            elif len(content_tokens) >= 2 and not has_phrase_match and not is_title_match:
-                if token_coverage < 0.40:
-                    continue
+            matched_title_count = sum(1 for t in substantive_tokens if t in note.title_tokens or t in clean_title_tokens)
+            if matched_title_count > 0 and len(substantive_tokens) > 0:
+                final_score += (matched_title_count / len(substantive_tokens)) * 14.0
 
-            score = 0.0
+            if is_exact_title:
+                final_score += 50.0
+            elif is_title_match and len(substantive_tokens) > 0:
+                final_score += 25.0
+            elif q_lower in note.title_lower or clean_title_lower in q_lower:
+                final_score += 10.0
 
-            # Title match boost
-            if q_lower == note.title_lower:
-                score += 50.0
-            elif q_lower in note.title_lower:
-                score += 30.0
-            elif is_title_match:
-                score += 35.0
+            # Index down-ranking
+            if note.is_index_doc:
+                final_score *= 0.20
+
+            norm_score = min(round(final_score / 30.0, 4), 1.0)
+            if norm_score >= 0.15:
+                relevance_reason = f"Verified content evidence in section '{best_chunk_heading}' ({int(norm_score * 100)}% match confidence)"
+                raw_accepted.append((final_score, norm_score, note, best_chunk_heading, best_chunk_excerpt, relevance_reason))
             else:
-                matched_title = sum(1 for t in content_tokens if t in note.title_tokens)
-                if matched_title > 0:
-                    score += (matched_title / len(content_tokens)) * 20.0
+                rejected.append(RejectedCandidate(
+                    source_note=note.rel_path,
+                    title=note.title,
+                    relevance=norm_score,
+                    rejection_reason=f"Content relevance score ({norm_score:.4f}) below minimum relevance threshold (0.15)."
+                ))
 
-            # Exact phrase in body
-            if q_lower in note.body_lower:
-                score += 10.0
-
-            # Heading matches
-            for h_lower, h_tokens in zip(note.heading_lowers, note.heading_tokens):
-                if q_lower == h_lower:
-                    score += 12.0
-                    break
-                elif q_lower in h_lower:
-                    score += 8.0
-                    break
-                elif any(t in h_tokens for t in content_tokens):
-                    score += 4.0
-                    break
-
-            # Tag matches
-            for tag_lower in note.tag_lowers:
-                if q_lower == tag_lower:
-                    score += 10.0
-                    break
-                elif any(t in tag_lower for t in content_tokens):
-                    score += 5.0
-                    break
-
-            # BM25 scoring on body tokens
-            doc_len = self.doc_lengths[doc_id]
-            for t in content_tokens:
-                tf = tf_map.get(t, 0)
-                if tf > 0:
-                    idf = self.idfs.get(t, 1.0)
-                    bm25_tf = (tf * (k1 + 1)) / (
-                        tf + k1 * (1 - b + b * (doc_len / (self.avg_doc_len or 1)))
-                    )
-                    score += idf * bm25_tf * 1.0
-
-            # Quality threshold
-            if score >= 6.0:
-                if note.is_index_doc:
-                    score *= 0.20
-                norm_score = min(round(score / 40.0, 4), 1.0)
-                if norm_score >= 0.15:
-                    scored.append((norm_score, note))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return scored
+        raw_accepted.sort(key=lambda x: x[0], reverse=True)
+        accepted = [(norm, note, h, exc, rz) for (raw, norm, note, h, exc, rz) in raw_accepted]
+        return accepted, rejected
 
     def search(
         self,
         query: str,
         filters: dict[str, Any] | None = None,
         task_scope: TaskScope | None = None,
-    ) -> list[tuple[float, _ParsedNote]]:
-        main_results = self._score_single_intent(query, filters, task_scope)
+    ) -> tuple[list[tuple[float, _ParsedNote, str, str, str]], list[RejectedCandidate]]:
+        main_accepted, main_rejected = self._score_single_intent(query, filters, task_scope)
 
         sub_intents = _decompose_query(query)
         if len(sub_intents) <= 1:
-            return main_results
+            return main_accepted, main_rejected
 
-        # For truly specialized, non-web domains (automotive, agriculture, healthcare),
-        # pass task_scope to sub-intents so domain gates are fully enforced.
-        # For all other domains (e-commerce, web, general), sub-intents must use
-        # task_scope=None to allow general web/software knowledge (Frontend, Backend,
-        # Database, Auth etc.) to be retrieved — e-commerce IS a web application domain.
-        # Raw-scrape blocking is enforced separately in the merge step.
-        _STRICT_SUB_INTENT_DOMAINS = {
-            "automotive", "agriculture", "healthcare",
-        }
-        dom = (task_scope.domain or "") if task_scope else ""
-        sub_intent_scope = task_scope if dom in _STRICT_SUB_INTENT_DOMAINS else None
-
-        sub_matches: list[list[tuple[float, _ParsedNote]]] = []
+        all_rejected = list(main_rejected)
+        sub_matches: list[list[tuple[float, _ParsedNote, str, str, str]]] = []
         for sub_q in sub_intents:
-            sub_res = self._score_single_intent(sub_q, filters, sub_intent_scope)
-            if sub_res:
-                sub_matches.append(sub_res)
+            sub_acc, sub_rej = self._score_single_intent(sub_q, filters, task_scope)
+            all_rejected.extend(sub_rej)
+            if sub_acc:
+                sub_matches.append(sub_acc)
 
         seen_paths: set[str] = set()
-        merged: list[tuple[float, _ParsedNote]] = []
+        merged: list[tuple[float, _ParsedNote, str, str, str]] = []
 
-        # Raw web-scrape notes (research/ folder) must only appear if they score
-        # sufficiently high on their OWN merit — not because a sub-intent happened
-        # to match some incidental term in a 150KB LinkedIn dump.
-        _MIN_SCRAPE_SCORE = 0.50
-
+        # Interleave top matches from each sub-intent (depth 0, 1, 2)
         max_depth = max((len(r) for r in sub_matches), default=0)
         for depth in range(min(max_depth, 3)):
             for sub_res in sub_matches:
                 if depth < len(sub_res):
-                    score, note = sub_res[depth]
-                    if note.is_index_doc:
-                        continue
-                    if note.is_raw_scrape and score < _MIN_SCRAPE_SCORE:
-                        continue
-                    if note.rel_path not in seen_paths:
-                        merged.append((score, note))
+                    score, note, h, exc, rz = sub_res[depth]
+                    if not note.is_index_doc and note.rel_path not in seen_paths:
+                        merged.append(sub_res[depth])
                         seen_paths.add(note.rel_path)
 
-        for score, note in main_results:
+        for item in main_accepted:
+            score, note, h, exc, rz = item
             if not note.is_index_doc and note.rel_path not in seen_paths:
-                if note.is_raw_scrape and score < _MIN_SCRAPE_SCORE:
-                    continue
-                merged.append((score, note))
+                merged.append(item)
                 seen_paths.add(note.rel_path)
 
-        for score, note in main_results:
-            if note.is_index_doc and note.rel_path not in seen_paths:
-                merged.append((score, note))
-                seen_paths.add(note.rel_path)
-
-        return merged
+        return merged, all_rejected
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -700,7 +761,15 @@ class LocalObsidianAdapter(ObsidianAdapter):
         )
         return len(self._notes)
 
-    def _to_memory_result(self, note: _ParsedNote, query: str, relevance: float) -> MemoryResult:
+    def _to_memory_result(
+        self,
+        note: _ParsedNote,
+        query: str,
+        relevance: float,
+        matched_section: str | None = None,
+        evidence_excerpt: str | None = None,
+        relevance_reason: str | None = None,
+    ) -> MemoryResult:
         return MemoryResult(
             id=str(uuid.uuid4()),
             query=query,
@@ -710,6 +779,9 @@ class LocalObsidianAdapter(ObsidianAdapter):
             relevance=relevance,
             approval_status=ApprovalStatus.RETRIEVED,
             source_note=note.rel_path,
+            matched_section=matched_section,
+            evidence_excerpt=evidence_excerpt,
+            relevance_reason=relevance_reason,
         )
 
     # ── ObsidianAdapter Interface ──────────────────────────────────────────
@@ -721,8 +793,23 @@ class LocalObsidianAdapter(ObsidianAdapter):
         task_scope: TaskScope | None = None,
     ) -> list[MemoryResult]:
         try:
-            results = self._index.search(query, filters, task_scope)
-            return [self._to_memory_result(note, query, score) for score, note in results]
+            accepted, rejected = self._index.search(query, filters, task_scope)
+            self.last_rejected_candidates = rejected
+            
+            # Count folders and files
+            folders_count = len({Path(n.rel_path).parent.as_posix() for n in self._notes})
+            self.last_scan_stats = VaultScanStats(
+                folders_scanned=folders_count,
+                total_files_discovered=len(self._notes),
+                markdown_files_indexed=len(self._notes),
+                candidates_evaluated=len(accepted) + len(rejected),
+                accepted_count=len(accepted),
+                rejected_count=len(rejected),
+            )
+            return [
+                self._to_memory_result(note, query, score, sec, exc, rz)
+                for score, note, sec, exc, rz in accepted
+            ]
         except Exception as exc:
             logger.error("LocalObsidianAdapter search failed: %s", exc)
             raise ObsidianAdapterError(f"Local Obsidian search error: {exc}") from exc

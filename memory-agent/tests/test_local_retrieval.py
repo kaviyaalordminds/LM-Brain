@@ -269,7 +269,7 @@ async def test_retrieval_benchmark_evaluation(local_adapter: LocalObsidianAdapte
         {"query": "Convolutional Neural Networks", "expected": "066-Convolutional-Neural-Networks"},
         {"query": "Adapter Pattern", "expected": "Adapter-Pattern"},
         {"query": "Builder Pattern", "expected": "Builder-Pattern"},
-        {"query": "Application Security", "expected": "Application Security"},
+        {"query": "Application Security", "expected": "Application-Security"},
         {"query": "Docker", "expected": "Docker"},
     ]
 

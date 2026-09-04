@@ -141,6 +141,9 @@ class MemoryAgent:
             "satisfied_gaps": sum(1 for g in gaps if g.status == "satisfied"),
         }
 
+        rejected_candidates = getattr(self._obsidian, "last_rejected_candidates", [])
+        vault_scan_stats = getattr(self._obsidian, "last_scan_stats", None)
+
         logger.info(
             "memory.search.completed",
             extra={**log_extra, "result_count": len(assembled), "found": found},
@@ -151,6 +154,8 @@ class MemoryAgent:
             count=len(assembled),
             task_scope=task_scope,
             knowledge_gaps=gaps,
+            rejected_candidates=rejected_candidates,
+            vault_scan_stats=vault_scan_stats,
             debug_info=debug_info,
         )
 

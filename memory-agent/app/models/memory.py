@@ -143,6 +143,15 @@ class MemoryResult(CamelModel):
     source_note: str | None = Field(
         None, description="Obsidian note path this was retrieved from"
     )
+    matched_section: str | None = Field(
+        None, description="Heading/section in document where relevant content was found"
+    )
+    evidence_excerpt: str | None = Field(
+        None, description="Direct text snippet supporting relevance"
+    )
+    relevance_reason: str | None = Field(
+        None, description="Why this document is relevant to the task"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -194,13 +203,14 @@ class MemoryWriteAudit(CamelModel):
 class TaskScope(CamelModel):
     """
     Structured decomposition of the user query / task.
-    Distinguishes domain, entity, platform, task type, and discrete requirements.
+    Distinguishes domain, entity, platform, task type, discriminators, and discrete requirements.
     """
 
     task_type: str = Field(..., description="Categorized task type (e.g. website_creation, ad_campaign, research)")
     domain: str | None = Field(None, description="Domain / industry (e.g. e-commerce, healthcare, quantum_computing)")
     entity: str | None = Field(None, description="Specific named entity (e.g. Lordminds, Tesla) or None if generic")
     platform: str | None = Field(None, description="Target platform / tech (e.g. Instagram, React, Web, iOS)")
+    discriminators: list[str] = Field(default_factory=list, description="Key discriminative concepts identifying task subject")
     requirements: list[str] = Field(default_factory=list, description="Discrete technical or business requirements")
     raw_query: str = Field(..., description="Original input query")
 
@@ -215,6 +225,31 @@ class KnowledgeGapItem(CamelModel):
     matched_note: str | None = Field(None, description="Relative path of satisfying note if found")
     relevance: float = Field(default=0.0, ge=0.0, le=1.0)
     reason: str | None = Field(None, description="Explanation of why requirement is satisfied or missing")
+    evidence_excerpt: str | None = Field(None, description="Snippet of supporting evidence from matched note")
+
+
+class RejectedCandidate(CamelModel):
+    """
+    Candidate note evaluated during search but rejected by relevance/domain/entity filters.
+    """
+
+    source_note: str = Field(..., description="Relative path of candidate note")
+    title: str = Field(..., description="Title of note")
+    relevance: float = Field(default=0.0, description="Evaluated relevance score")
+    rejection_reason: str = Field(..., description="Human-readable explanation of why note was rejected")
+
+
+class VaultScanStats(CamelModel):
+    """
+    Vault scan and candidate evaluation statistics.
+    """
+
+    folders_scanned: int = Field(default=0, description="Total directories scanned in Obsidian vault")
+    total_files_discovered: int = Field(default=0, description="Total files discovered in vault")
+    markdown_files_indexed: int = Field(default=0, description="Total markdown notes indexed")
+    candidates_evaluated: int = Field(default=0, description="Total candidate notes evaluated for query")
+    accepted_count: int = Field(default=0, description="Number of accepted relevant results")
+    rejected_count: int = Field(default=0, description="Number of rejected candidate notes")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -246,6 +281,8 @@ class SearchResponse(CamelModel):
     count: int
     task_scope: TaskScope | None = Field(None, description="Extracted task understanding")
     knowledge_gaps: list[KnowledgeGapItem] = Field(default_factory=list, description="Identified knowledge gaps")
+    rejected_candidates: list[RejectedCandidate] = Field(default_factory=list, description="Evaluated and rejected candidate notes with reasons")
+    vault_scan_stats: VaultScanStats | None = Field(None, description="Vault scan and retrieval statistics")
     debug_info: dict[str, Any] = Field(default_factory=dict, description="Diagnostic retrieval metadata")
 
 
