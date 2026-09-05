@@ -49,6 +49,11 @@ class ISoftwareWorkspace(ABC):
         pass
 
     @abstractmethod
+    def delete_file(self, relative_path: str) -> WorkspaceOperationResult:
+        """Delete a workspace-contained file."""
+        pass
+
+    @abstractmethod
     def list_files(self, relative_path: str = ".") -> WorkspaceOperationResult:
         """List files contained within the workspace."""
         pass

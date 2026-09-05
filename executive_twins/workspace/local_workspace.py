@@ -310,6 +310,73 @@ class LocalSoftwareWorkspace(ISoftwareWorkspace):
                 error_type="WRITE_ERROR",
             )
 
+    def delete_file(self, relative_path: str) -> WorkspaceOperationResult:
+        if not self.workspace_exists():
+            return WorkspaceOperationResult(
+                success=False,
+                operation=WorkspaceOperationType.DELETE_FILE,
+                workspace_id=self._workspace_id,
+                relative_path=relative_path,
+                error_message="WORKSPACE_NOT_FOUND: Workspace directory does not exist or is inactive.",
+                error_type="WORKSPACE_NOT_FOUND",
+            )
+        try:
+            target_path = self._validate_and_resolve_path(relative_path)
+        except PathSecurityException as se:
+            return WorkspaceOperationResult(
+                success=False,
+                operation=WorkspaceOperationType.DELETE_FILE,
+                workspace_id=self._workspace_id,
+                relative_path=relative_path,
+                error_message=str(se),
+                error_type="SECURITY_PATH_TRAVERSAL",
+            )
+
+        if not target_path.exists():
+            return WorkspaceOperationResult(
+                success=False,
+                operation=WorkspaceOperationType.DELETE_FILE,
+                workspace_id=self._workspace_id,
+                relative_path=relative_path,
+                error_message=f"FILE_NOT_FOUND: File '{relative_path}' does not exist in workspace.",
+                error_type="FILE_NOT_FOUND",
+            )
+
+        if target_path.is_dir():
+            return WorkspaceOperationResult(
+                success=False,
+                operation=WorkspaceOperationType.DELETE_FILE,
+                workspace_id=self._workspace_id,
+                relative_path=relative_path,
+                error_message=f"IS_DIRECTORY: Path '{relative_path}' is a directory. Only files can be deleted.",
+                error_type="IS_DIRECTORY",
+            )
+
+        try:
+            rel_str = self._get_relative_path_string(target_path)
+            target_path.unlink()
+            fact = FactItem(
+                statement=f"Deleted workspace file '{rel_str}'.",
+                state=FactState.FACT,
+                source="local_workspace",
+            )
+            return WorkspaceOperationResult(
+                success=True,
+                operation=WorkspaceOperationType.DELETE_FILE,
+                workspace_id=self._workspace_id,
+                relative_path=rel_str,
+                facts=[fact],
+            )
+        except Exception as e:
+            return WorkspaceOperationResult(
+                success=False,
+                operation=WorkspaceOperationType.DELETE_FILE,
+                workspace_id=self._workspace_id,
+                relative_path=relative_path,
+                error_message=f"DELETE_ERROR: Failed to delete file: {str(e)}",
+                error_type="DELETE_ERROR",
+            )
+
     def list_files(self, relative_path: str = ".") -> WorkspaceOperationResult:
         if not self.workspace_exists():
             return WorkspaceOperationResult(
