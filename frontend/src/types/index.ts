@@ -227,6 +227,17 @@ export interface MemoryWritebackRecord {
   timestamp?: string;
 }
 
+export type RecoverySubStep =
+  | 'FAILURE'
+  | 'OBSERVATION'
+  | 'DIAGNOSIS'
+  | 'REFLECTION'
+  | 'REPLAN'
+  | 'RETRY'
+  | 'VALIDATION'
+  | 'VERIFICATION'
+  | 'COMPLETED';
+
 export interface RecoveryEvent {
   attempt: number;
   maxAttempts: number;
@@ -236,6 +247,7 @@ export interface RecoveryEvent {
   replannedGoal: string;
   replanStepCount: number;
   status: 'IN_PROGRESS' | 'RECOVERED' | 'EXHAUSTED';
+  activeStep?: RecoverySubStep;
 }
 
 export interface AuditEvent {

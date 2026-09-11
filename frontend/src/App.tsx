@@ -22,6 +22,10 @@ export function App() {
     isExecuting,
     selectedStageIndex,
     setSelectedStageIndex,
+    executionMode,
+    setExecutionMode,
+    backendHealth,
+    executionError,
     startRun,
     loadRun,
     triggerControlledFailure,
@@ -47,6 +51,8 @@ export function App() {
       onNavigate={setCurrentPage}
       activeRunId={currentRun?.runId}
       isRunActive={isExecuting}
+      executionMode={executionMode}
+      onToggleMode={setExecutionMode}
     >
       {currentPage === 'overview' && (
         <OverviewPage
@@ -60,6 +66,8 @@ export function App() {
         <NewWorkPage
           onNavigate={setCurrentPage}
           onStartRun={handleStartRun}
+          executionMode={executionMode}
+          onToggleMode={setExecutionMode}
         />
       )}
 
@@ -72,6 +80,9 @@ export function App() {
           onTriggerControlledFailure={triggerControlledFailure}
           onTriggerRepeatedFailure={triggerRepeatedFailure}
           onNavigate={setCurrentPage}
+          executionMode={executionMode}
+          executionError={executionError}
+          onToggleMode={setExecutionMode}
         />
       )}
 

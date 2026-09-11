@@ -6,6 +6,7 @@ import {
   Bot,
   Brain,
   CheckCircle2,
+  Clock,
   Cpu,
   Database,
   Eye,
@@ -30,13 +31,16 @@ import { CompanyKnowledgeView } from '../components/run/CompanyKnowledgeView';
 import { EvidenceView } from '../components/run/EvidenceView';
 import { MemoryWritebackView } from '../components/run/MemoryWritebackView';
 import { ReasoningPlanView } from '../components/run/ReasoningPlanView';
-import { RecoverySimulationPanel } from '../components/run/RecoverySimulationPanel';
 import { SpecialistExecutionView } from '../components/run/SpecialistExecutionView';
 import { ValidationView } from '../components/run/ValidationView';
 import { VerificationView } from '../components/run/VerificationView';
-import { WorkflowPipeline } from '../components/run/WorkflowPipeline';
 import { WorkspaceFilesView } from '../components/run/WorkspaceFilesView';
+import { AutonomousExecutionPipeline } from '../components/workforce/AutonomousExecutionPipeline';
+import { CurrentActivityPanel } from '../components/workforce/CurrentActivityPanel';
+import { ExecutionTimeline } from '../components/workforce/ExecutionTimeline';
+import { FailureRecoveryPanel } from '../components/workforce/FailureRecoveryPanel';
 import { WorkflowRun } from '../types';
+import { ExecutionMode } from '../hooks/useRunExecution';
 
 interface LiveRunPageProps {
   run: WorkflowRun;
@@ -46,6 +50,9 @@ interface LiveRunPageProps {
   onTriggerControlledFailure: () => void;
   onTriggerRepeatedFailure: () => void;
   onNavigate: (page: PageId) => void;
+  executionMode?: ExecutionMode;
+  executionError?: string | null;
+  onToggleMode?: (mode: ExecutionMode) => void;
 }
 
 export const LiveRunPage: React.FC<LiveRunPageProps> = ({
@@ -56,17 +63,54 @@ export const LiveRunPage: React.FC<LiveRunPageProps> = ({
   onTriggerControlledFailure,
   onTriggerRepeatedFailure,
   onNavigate,
+  executionMode = 'LOCAL',
+  executionError,
+  onToggleMode,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'pipeline' | 'reasoning' | 'knowledge' | 'capabilities' | 'execution' | 'workspace' | 'validation' | 'evidence' | 'verification' | 'memory'
+    | 'pipeline'
+    | 'timeline'
+    | 'reasoning'
+    | 'knowledge'
+    | 'capabilities'
+    | 'execution'
+    | 'workspace'
+    | 'validation'
+    | 'evidence'
+    | 'verification'
+    | 'memory'
   >('pipeline');
 
   const isCompleted = run.status === 'COMPLETED';
   const isFailed = run.status === 'FAILED';
   const isRecovering = run.status === 'RECOVERING';
+  const isLocalRun = !run.isDemo;
 
   return (
     <div className="space-y-6">
+      {/* Backend Error Alert Banner */}
+      {executionError && (
+        <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800/80 text-rose-200 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <div>
+              <strong className="text-white block font-sans text-sm">LOCAL BACKEND EXECUTION ISSUE</strong>
+              <span>{executionError}</span>
+            </div>
+          </div>
+          {onToggleMode && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onToggleMode('DEMO')}
+              className="border-rose-700 text-rose-300 hover:bg-rose-900/50"
+            >
+              Switch to Demo Mode
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Hero Header Section */}
       <div className="p-6 rounded-2xl bg-gradient-to-r from-[#111827] via-[#141E33] to-[#0D1322] border border-slate-800 shadow-xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -76,6 +120,9 @@ export const LiveRunPage: React.FC<LiveRunPageProps> = ({
                 {run.runId}
               </span>
               <StatusIndicator status={run.status} size="lg" />
+              <Badge variant={isLocalRun ? 'primary' : 'warning'} size="sm">
+                {isLocalRun ? 'REAL LOCAL RUNNER' : 'DEMO SIMULATION'}
+              </Badge>
               {run.executiveTwinActivated && (
                 <Badge variant="conditional" size="sm">
                   TWIN: {run.executiveTwinActivated.role} ACTIVATED
@@ -115,8 +162,8 @@ export const LiveRunPage: React.FC<LiveRunPageProps> = ({
         </div>
       </div>
 
-      {/* 10-Stage Autonomous Control Loop Pipeline */}
-      <WorkflowPipeline
+      {/* 10-Stage Dynamic Autonomous Control Loop Pipeline */}
+      <AutonomousExecutionPipeline
         stages={run.stages}
         currentStageIndex={run.currentStageIndex}
         selectedStageIndex={selectedStageIndex}
@@ -137,10 +184,28 @@ export const LiveRunPage: React.FC<LiveRunPageProps> = ({
           };
           if (tabMap[idx]) setActiveTab(tabMap[idx]);
         }}
+        executiveTwin={run.executiveTwinActivated}
+        selectedSpecialists={run.selectedSpecialists}
+        specialistExecutions={run.specialistExecutions}
+        isExecuting={isExecuting}
+        overallStatus={run.status}
       />
 
-      {/* Failure & Bounded Recovery Simulation Controls */}
-      <RecoverySimulationPanel
+      {/* Live Current Activity Panel */}
+      <CurrentActivityPanel
+        currentStage={run.stages[run.currentStageIndex]}
+        currentStageIndex={run.currentStageIndex}
+        totalStages={run.stages.length}
+        reasoningPlan={run.reasoningPlan}
+        specialistExecutions={run.specialistExecutions}
+        workspaceFiles={run.workspaceFiles}
+        selectedSpecialists={run.selectedSpecialists}
+        isExecuting={isExecuting}
+        status={run.status}
+      />
+
+      {/* Autonomous Failure & Bounded Recovery Subsystem Panel */}
+      <FailureRecoveryPanel
         recoveryHistory={run.recoveryHistory}
         onTriggerControlledFailure={onTriggerControlledFailure}
         onTriggerRepeatedFailure={onTriggerRepeatedFailure}
@@ -151,6 +216,7 @@ export const LiveRunPage: React.FC<LiveRunPageProps> = ({
       <div className="border-b border-slate-800 flex items-center gap-1 overflow-x-auto pb-1 text-xs font-mono">
         {[
           { id: 'pipeline', label: 'All Modules Overview', icon: Layers },
+          { id: 'timeline', label: 'Event Timeline', icon: Clock },
           { id: 'reasoning', label: 'Structured Plan (No CoT)', icon: Brain },
           { id: 'knowledge', label: 'Obsidian Knowledge', icon: Database },
           { id: 'capabilities', label: 'Capability Registry', icon: Bot },
@@ -184,6 +250,13 @@ export const LiveRunPage: React.FC<LiveRunPageProps> = ({
       <div className="space-y-6">
         {activeTab === 'pipeline' && (
           <div className="space-y-6">
+            <ExecutionTimeline
+              stages={run.stages}
+              currentStageIndex={run.currentStageIndex}
+              auditEvents={run.auditEvents}
+              isExecuting={isExecuting}
+              status={run.status}
+            />
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <ReasoningPlanView plan={run.reasoningPlan} />
               <CompanyKnowledgeView documents={run.knowledgeRetrieved} />
@@ -208,6 +281,15 @@ export const LiveRunPage: React.FC<LiveRunPageProps> = ({
           </div>
         )}
 
+        {activeTab === 'timeline' && (
+          <ExecutionTimeline
+            stages={run.stages}
+            currentStageIndex={run.currentStageIndex}
+            auditEvents={run.auditEvents}
+            isExecuting={isExecuting}
+            status={run.status}
+          />
+        )}
         {activeTab === 'reasoning' && <ReasoningPlanView plan={run.reasoningPlan} />}
         {activeTab === 'knowledge' && <CompanyKnowledgeView documents={run.knowledgeRetrieved} />}
         {activeTab === 'capabilities' && <CapabilitySelectionView selectedSpecialists={run.selectedSpecialists} />}

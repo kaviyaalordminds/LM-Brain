@@ -3,7 +3,8 @@ DEV/TEST adapters and registered workspace capability execution handlers.
 Used for local development and testing without production cloud containers.
 """
 
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from executive_twins.execution.capability_execution_engine import (
     BaseCapabilityHandler,
@@ -16,28 +17,51 @@ from executive_twins.workspace.interfaces import ISoftwareWorkspace
 from executive_twins.workspace.local_workspace import LocalSoftwareWorkspace
 
 
+def get_default_workspace_dir() -> Path:
+    """Derive repository-local workspaces directory dynamically."""
+    repo_root = Path(__file__).resolve().parents[2]
+    workspaces_dir = repo_root / "workspaces"
+    return workspaces_dir
+
+
 class DevTestWorkspaceAdapter:
     """
-    DEV_TEST_ONLY_ADAPTER: Manages controlled local software workspaces during testing.
+    DEV_TEST_ONLY_ADAPTER: Manages controlled local software workspaces.
     THIS IS NOT THE PRODUCTION SANDBOX CONTAINER INTEGRATION.
     Used for local development and testing when external cloud container sandbox is not attached.
     """
 
-    def __init__(self, base_temp_dir: str = "", temp_workspace_dir: Optional[str] = None) -> None:
-        self.base_temp_dir = temp_workspace_dir or base_temp_dir
+    def __init__(
+        self,
+        base_temp_dir: Optional[str] = None,
+        temp_workspace_dir: Optional[str] = None,
+    ) -> None:
+        if base_temp_dir is not None and base_temp_dir != "":
+            self.base_temp_dir = str(base_temp_dir)
+        elif temp_workspace_dir is not None and temp_workspace_dir != "":
+            self.base_temp_dir = str(temp_workspace_dir)
+        else:
+            self.base_temp_dir = str(get_default_workspace_dir())
         self._active_workspaces: Dict[str, ISoftwareWorkspace] = {}
 
     def create_workspace(self, workspace_id: str) -> ISoftwareWorkspace:
-        """Create and initialize a local software workspace in a temporary directory."""
-        root_path = f"{self.base_temp_dir}/{workspace_id}"
+        """Create and initialize a local software workspace in the configured workspace root."""
+        root_path = Path(self.base_temp_dir) / workspace_id
         workspace = LocalSoftwareWorkspace(workspace_id=workspace_id, root_path=root_path)
         workspace.create_workspace()
         self._active_workspaces[workspace_id] = workspace
         return workspace
 
     def get_workspace(self, workspace_id: str) -> Optional[ISoftwareWorkspace]:
-        """Retrieve an active workspace by identifier."""
-        return self._active_workspaces.get(workspace_id)
+        """Retrieve an active workspace by identifier, creating it if not already active."""
+        if not workspace_id:
+            workspace_id = "default"
+        if workspace_id in self._active_workspaces:
+            ws = self._active_workspaces[workspace_id]
+            if not ws.workspace_exists():
+                ws.create_workspace()
+            return ws
+        return self.create_workspace(workspace_id)
 
     def close_all(self, cleanup: bool = True) -> None:
         """Close and cleanup all tracked workspaces."""
@@ -61,10 +85,15 @@ class WorkspaceBuildCapabilityHandler(BaseCapabilityHandler):
     def __init__(self, workspace_adapter: DevTestWorkspaceAdapter) -> None:
         self.workspace_adapter = workspace_adapter
 
+    def validate_parameters(self, inputs: Dict[str, Any]) -> Optional[str]:
+        if "workspace_id" not in inputs or not inputs["workspace_id"]:
+            inputs["workspace_id"] = "default"
+        return super().validate_parameters(inputs)
+
     def execute(
         self, request: DelegationRequest, specialist: SpecialistMetadata
     ) -> CapabilityHandlerOutput:
-        ws_id = request.inputs.get("workspace_id", "")
+        ws_id = request.inputs.get("workspace_id", "default")
         proj_file = request.inputs.get("project_file", "")
 
         workspace = self.workspace_adapter.get_workspace(ws_id)

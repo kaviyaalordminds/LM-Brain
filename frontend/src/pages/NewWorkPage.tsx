@@ -19,15 +19,20 @@ import { Button } from '../components/common/Button';
 import { Card } from '../components/common/Card';
 import { PageId } from '../components/layout/Sidebar';
 import { WorkRequest } from '../types';
+import { ExecutionMode } from '../hooks/useRunExecution';
 
 interface NewWorkPageProps {
   onNavigate: (page: PageId) => void;
   onStartRun: (request: WorkRequest, type?: 'STANDARD' | 'CONTROLLED_FAILURE' | 'BOUNDED_FAILURE' | 'STRATEGIC_TWIN') => void;
+  executionMode?: ExecutionMode;
+  onToggleMode?: (mode: ExecutionMode) => void;
 }
 
 export const NewWorkPage: React.FC<NewWorkPageProps> = ({
   onNavigate,
   onStartRun,
+  executionMode = 'LOCAL',
+  onToggleMode,
 }) => {
   const exampleRequests = [
     {
@@ -124,6 +129,54 @@ Format in markdown and verify all terminology against Obsidian standards.`,
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Work Request Input Form */}
         <div className="lg:col-span-2 space-y-4">
+          {/* Execution Environment Selector */}
+          {onToggleMode && (
+            <div className={`p-4 rounded-xl border flex flex-wrap items-center justify-between gap-3 text-xs font-mono transition-all ${
+              executionMode === 'LOCAL'
+                ? 'bg-emerald-950/30 border-emerald-700/60 text-emerald-200'
+                : 'bg-amber-950/30 border-amber-700/60 text-amber-200'
+            }`}>
+              <div className="flex items-center gap-2.5">
+                <span className={`w-2.5 h-2.5 rounded-full ${executionMode === 'LOCAL' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                <div>
+                  <div className="font-bold text-slate-100">
+                    {executionMode === 'LOCAL' ? 'REAL LOCAL BACKEND MODE' : 'DEMO SIMULATOR MODE'}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {executionMode === 'LOCAL'
+                      ? 'Executes Python LocalRunner -> MasterOrchestrator -> Real workspace files on disk'
+                      : 'Executes deterministic offline simulation without running Python'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 bg-slate-900/90 p-1 rounded-lg border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => onToggleMode('LOCAL')}
+                  className={`px-3 py-1 rounded font-semibold transition-all ${
+                    executionMode === 'LOCAL'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  LOCAL BACKEND
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleMode('DEMO')}
+                  className={`px-3 py-1 rounded font-semibold transition-all ${
+                    executionMode === 'DEMO'
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  DEMO MODE
+                </button>
+              </div>
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
             <Card
               title="Work Request Specification"

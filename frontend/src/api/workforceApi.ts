@@ -134,4 +134,105 @@ class DemoWorkforceApi implements IWorkforceApi {
   }
 }
 
-export const workforceApi: IWorkforceApi = new DemoWorkforceApi();
+/**
+ * Local Workforce API Implementation
+ * Communicates with the local development bridge to trigger Python LocalRunner.
+ * Operates strictly on localhost through the Vite development server.
+ */
+class LocalWorkforceApi implements IWorkforceApi {
+  private runs: WorkflowRun[] = [];
+
+  async getSystemStats(): Promise<SystemStats> {
+    try {
+      const res = await fetch('/api/local-health');
+      if (res.ok) {
+        const data = await res.json();
+        return {
+          systemStatus: 'Operational',
+          activeRunsCount: 0,
+          completedRunsCount: this.runs.length,
+          availableWorkersCount: mockSpecialists.length,
+          knowledgeDocumentsCount: mockObsidianKnowledge.length,
+          evidenceItemsCount: this.runs.flatMap(r => r.evidenceItems).length,
+          backendConnected: data.pythonAvailable === true,
+          isDemoMode: false,
+        };
+      }
+    } catch {
+      // Offline / unavailable
+    }
+
+    return {
+      systemStatus: 'Offline',
+      activeRunsCount: 0,
+      completedRunsCount: 0,
+      availableWorkersCount: 0,
+      knowledgeDocumentsCount: 0,
+      evidenceItemsCount: 0,
+      backendConnected: false,
+      isDemoMode: false,
+    };
+  }
+
+  async getRuns(): Promise<WorkflowRun[]> {
+    return [...this.runs];
+  }
+
+  async getRunById(runId: string): Promise<WorkflowRun | null> {
+    const run = this.runs.find(r => r.runId.toUpperCase() === runId.toUpperCase());
+    return run ? JSON.parse(JSON.stringify(run)) : null;
+  }
+
+  async createRun(request: WorkRequest): Promise<WorkflowRun> {
+    const response = await fetch('/api/local-run', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        request: request.userGoal,
+        userGoal: request.userGoal,
+      }),
+    });
+
+    if (!response.ok) {
+      const errJson = await response.json().catch(() => ({}));
+      const msg = errJson.message || errJson.error || `Local backend request failed with status ${response.status}`;
+      throw new Error(msg);
+    }
+
+    const workflowRun: WorkflowRun = await response.json();
+    this.runs.unshift(workflowRun);
+    return workflowRun;
+  }
+
+  async getSpecialists(): Promise<SpecialistMetadata[]> {
+    return [...mockSpecialists];
+  }
+
+  async getExecutiveTwins(): Promise<ExecutiveTwin[]> {
+    return [...mockExecutiveTwins];
+  }
+
+  async getCompanyKnowledge(): Promise<ObsidianDocument[]> {
+    return [...mockObsidianKnowledge];
+  }
+
+  async getEvidenceVault(): Promise<TypedEvidence[]> {
+    const allEvidence = this.runs.flatMap(r => r.evidenceItems);
+    return allEvidence.length > 0 ? allEvidence : mockRuns[0].evidenceItems;
+  }
+
+  async getAuditLog(): Promise<AuditEvent[]> {
+    const allAudits = this.runs.flatMap(r => r.auditEvents);
+    return allAudits.length > 0 ? allAudits : mockAuditEvents;
+  }
+
+  async cancelRun(runId: string): Promise<boolean> {
+    return false;
+  }
+}
+
+export const demoWorkforceApi: IWorkforceApi = new DemoWorkforceApi();
+export const localWorkforceApi: IWorkforceApi = new LocalWorkforceApi();
+export const workforceApi: IWorkforceApi = demoWorkforceApi;

@@ -1,8 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { localWorkforceApi } from '../api/workforceApi';
 import { LiveRunSimulator, mockRuns } from '../mock';
 import { WorkflowRun, WorkRequest } from '../types';
 
+export type ExecutionMode = 'DEMO' | 'LOCAL';
+
+export interface BackendHealth {
+  status: string;
+  pythonAvailable: boolean;
+  pythonExecutable?: string;
+  message?: string;
+}
+
 export function useRunExecution(initialRunId?: string) {
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('LOCAL');
+  const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
+  const [executionError, setExecutionError] = useState<string | null>(null);
+
   const [currentRun, setCurrentRun] = useState<WorkflowRun>(() => {
     if (initialRunId) {
       const found = mockRuns.find(r => r.runId === initialRunId);
@@ -15,35 +29,54 @@ export function useRunExecution(initialRunId?: string) {
   const [selectedStageIndex, setSelectedStageIndex] = useState<number>(0);
   const simulatorRef = useRef<LiveRunSimulator | null>(null);
 
+  // Check backend health on mount
+  useEffect(() => {
+    fetch('/api/local-health')
+      .then(res => res.json())
+      .then(data => {
+        setBackendHealth(data);
+        if (!data.pythonAvailable) {
+          // If python is unavailable, default to DEMO mode
+          setExecutionMode('DEMO');
+        }
+      })
+      .catch(() => {
+        setBackendHealth({ status: 'unavailable', pythonAvailable: false });
+        setExecutionMode('DEMO');
+      });
+  }, []);
+
   const startRun = useCallback(
     async (
       request: WorkRequest,
       simulationType: 'STANDARD' | 'CONTROLLED_FAILURE' | 'BOUNDED_FAILURE' | 'STRATEGIC_TWIN' = 'STANDARD'
     ) => {
+      setExecutionError(null);
+
       if (simulatorRef.current) {
         simulatorRef.current.cancel();
       }
 
       const runTemplate: WorkflowRun = {
-        runId: `RUN-00${Math.floor(Math.random() * 900) + 100}`,
+        runId: `RUN-${Math.floor(Math.random() * 900) + 100}`,
         requestId: request.requestId || `req_${Date.now()}`,
         userGoal: request.userGoal,
-        status: 'RECEIVED',
+        status: 'EXECUTING',
         durationSeconds: 0,
-        isDemo: true,
+        isDemo: executionMode === 'DEMO',
         startedAt: new Date().toISOString(),
         currentStageIndex: 0,
         stages: [
-          { key: 'PERCEPTION', label: 'Perception', shortDescription: 'Waiting for normalization...', status: 'WAITING' },
-          { key: 'COMPANY_KNOWLEDGE', label: 'Company Knowledge', shortDescription: 'Obsidian retrieval pending...', status: 'WAITING' },
-          { key: 'REASONING', label: 'Reasoning', shortDescription: 'Structured planning pending...', status: 'WAITING' },
-          { key: 'PLAN_VALIDATION', label: 'Plan Validation', shortDescription: 'Bounds check pending...', status: 'WAITING' },
-          { key: 'CAPABILITY_SELECTION', label: 'Capability Selection', shortDescription: 'Registry matching pending...', status: 'WAITING' },
-          { key: 'SPECIALIST_DELEGATION', label: 'Specialist Delegation', shortDescription: 'SecurityGuard allocation pending...', status: 'WAITING' },
-          { key: 'CONTROLLED_EXECUTION', label: 'Controlled Execution', shortDescription: 'Sandboxed execution pending...', status: 'WAITING' },
-          { key: 'OBSERVATION_QA', label: 'Observation / QA', shortDescription: 'Evidence capture pending...', status: 'WAITING' },
-          { key: 'VERIFICATION', label: 'Verification', shortDescription: 'Success assertion pending...', status: 'WAITING' },
-          { key: 'MEMORY_WRITEBACK', label: 'Memory Writeback', shortDescription: 'Obsidian writeback pending...', status: 'WAITING' },
+          { key: 'PERCEPTION', label: 'Perception', shortDescription: 'Normalizing intent & requirements...', status: 'RUNNING' },
+          { key: 'COMPANY_KNOWLEDGE', label: 'Company Knowledge', shortDescription: 'Authoritative Obsidian retrieval pending...', status: 'WAITING' },
+          { key: 'REASONING', label: 'Reasoning', shortDescription: 'Structured multi-step planning pending...', status: 'WAITING' },
+          { key: 'PLAN_VALIDATION', label: 'Plan Validation', shortDescription: 'DAG bounds & safety check pending...', status: 'WAITING' },
+          { key: 'CAPABILITY_SELECTION', label: 'Capability Selection', shortDescription: 'Specialist registry matching pending...', status: 'WAITING' },
+          { key: 'SPECIALIST_DELEGATION', label: 'Specialist Delegation', shortDescription: 'SecurityGuard boundary allocation pending...', status: 'WAITING' },
+          { key: 'CONTROLLED_EXECUTION', label: 'Controlled Execution', shortDescription: 'Sandboxed capability execution pending...', status: 'WAITING' },
+          { key: 'OBSERVATION_QA', label: 'Observation / QA', shortDescription: 'Empirical evidence capture pending...', status: 'WAITING' },
+          { key: 'VERIFICATION', label: 'Verification', shortDescription: 'Success criteria verification pending...', status: 'WAITING' },
+          { key: 'MEMORY_WRITEBACK', label: 'Memory Writeback', shortDescription: 'Obsidian memory persistence pending...', status: 'WAITING' },
         ],
         selectedSpecialists: {},
         specialistExecutions: [],
@@ -58,6 +91,29 @@ export function useRunExecution(initialRunId?: string) {
       setCurrentRun(runTemplate);
       setIsExecuting(true);
 
+      // --- LOCAL REAL MODE ---
+      if (executionMode === 'LOCAL') {
+        try {
+          const realRun = await localWorkforceApi.createRun(request);
+          setCurrentRun(realRun);
+          setSelectedStageIndex(realRun.currentStageIndex || 0);
+          setIsExecuting(false);
+        } catch (err: any) {
+          const errMsg = err.message || 'Local backend execution failed.';
+          setExecutionError(errMsg);
+          setIsExecuting(false);
+          setCurrentRun(prev => ({
+            ...prev,
+            status: 'FAILED',
+            stages: prev.stages.map((s, idx) =>
+              idx === 0 ? { ...s, status: 'FAILED', shortDescription: errMsg } : s
+            ),
+          }));
+        }
+        return;
+      }
+
+      // --- DEMO SIMULATOR MODE ---
       const simulator = new LiveRunSimulator(runTemplate, (updatedRun) => {
         setCurrentRun(updatedRun);
         setSelectedStageIndex(updatedRun.currentStageIndex);
@@ -69,7 +125,7 @@ export function useRunExecution(initialRunId?: string) {
       simulatorRef.current = simulator;
       await simulator.startSimulation(simulationType);
     },
-    []
+    [executionMode]
   );
 
   const loadRun = useCallback((run: WorkflowRun) => {
@@ -77,6 +133,7 @@ export function useRunExecution(initialRunId?: string) {
       simulatorRef.current.cancel();
     }
     setIsExecuting(false);
+    setExecutionError(null);
     setCurrentRun(JSON.parse(JSON.stringify(run)));
     setSelectedStageIndex(run.currentStageIndex || 0);
   }, []);
@@ -122,6 +179,10 @@ export function useRunExecution(initialRunId?: string) {
     isExecuting,
     selectedStageIndex,
     setSelectedStageIndex,
+    executionMode,
+    setExecutionMode,
+    backendHealth,
+    executionError,
     startRun,
     loadRun,
     triggerControlledFailure,

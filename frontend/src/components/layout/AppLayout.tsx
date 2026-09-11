@@ -2,6 +2,7 @@ import React from 'react';
 import { DemoBanner } from '../common/DemoBanner';
 import { Header } from './Header';
 import { PageId, Sidebar } from './Sidebar';
+import { ExecutionMode } from '../../hooks/useRunExecution';
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -9,6 +10,8 @@ interface AppLayoutProps {
   onNavigate: (page: PageId) => void;
   activeRunId?: string;
   isRunActive?: boolean;
+  executionMode?: ExecutionMode;
+  onToggleMode?: (mode: ExecutionMode) => void;
 }
 
 export const AppLayout: React.FC<AppLayoutProps> = ({
@@ -17,11 +20,16 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   onNavigate,
   activeRunId,
   isRunActive,
+  executionMode = 'LOCAL',
+  onToggleMode,
 }) => {
   return (
     <div className="flex flex-col h-screen bg-[#0B0F19] text-slate-100 overflow-hidden font-sans">
-      {/* Enterprise Demo Banner */}
-      <DemoBanner />
+      {/* Enterprise Status Banner */}
+      <DemoBanner
+        executionMode={executionMode}
+        onToggleMode={onToggleMode}
+      />
 
       <div className="flex flex-1 overflow-hidden">
         {/* Persistent Global Sidebar */}
@@ -38,6 +46,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
             currentPage={currentPage}
             activeRunId={activeRunId}
             onNavigate={onNavigate}
+            executionMode={executionMode}
+            onToggleMode={onToggleMode}
           />
           <main className="flex-1 overflow-y-auto p-6 md:p-8">
             <div className="max-w-7xl mx-auto space-y-6">{children}</div>

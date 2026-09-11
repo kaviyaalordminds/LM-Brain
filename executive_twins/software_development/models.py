@@ -38,6 +38,7 @@ class PlanStepAction(str, Enum):
     RUN_LINT = "RUN_LINT"
     RUN_TYPECHECK = "RUN_TYPECHECK"
     WORKSPACE_BUILD = "WORKSPACE_BUILD"
+    VALIDATE_PROJECT = "VALIDATE_PROJECT"
     GIT_STATUS = "GIT_STATUS"
     GIT_DIFF = "GIT_DIFF"
     GIT_STAGE = "GIT_STAGE"
@@ -51,6 +52,13 @@ class PlanStepAction(str, Enum):
     DOCKER_INSPECT = "DOCKER_INSPECT"
     DOCKER_STOP = "DOCKER_STOP"
     DOCKER_REMOVE = "DOCKER_REMOVE"
+
+
+class DevelopmentFileSpec(BaseModel):
+    """Specification of a file to be developed or validated in a project."""
+    path: str
+    purpose: str
+    is_required: bool = True
 
 
 class PlanStepStatus(str, Enum):
@@ -92,6 +100,11 @@ class DevelopmentPlan(BaseModel):
     """Ordered collection of development steps executed within the bounded development loop."""
     plan_id: str
     request_id: str
+    project_goal: Optional[str] = None
+    workspace_id: Optional[str] = None
+    files: List[DevelopmentFileSpec] = Field(default_factory=list)
+    validation_steps: List[str] = Field(default_factory=list)
+    success_criteria: List[str] = Field(default_factory=list)
     steps: List[PlanStep] = Field(default_factory=list)
     current_step_index: int = 0
     status: DevelopmentPlanStatus = DevelopmentPlanStatus.DRAFT

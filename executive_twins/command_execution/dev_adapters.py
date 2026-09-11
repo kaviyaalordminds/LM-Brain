@@ -3,7 +3,7 @@ DEV/TEST adapters and registered Command Execution capability handlers.
 Used for local development and testing without production cloud containers.
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from executive_twins.command_execution.command_executor import (
     CommandRegistry,
@@ -41,12 +41,17 @@ class DevCommandExecutorAdapter:
 
     def get_executor(self, workspace_id: str) -> Optional[ICommandExecutor]:
         """Get or create a ControlledCommandExecutor for a workspace."""
+        if not workspace_id:
+            workspace_id = "default"
         if workspace_id in self._active_executors:
             return self._active_executors[workspace_id]
 
         workspace = self.workspace_adapter.get_workspace(workspace_id)
         if not workspace or not workspace.workspace_exists():
-            return None
+            if workspace and not workspace.workspace_exists():
+                workspace.create_workspace()
+            elif not workspace:
+                workspace = self.workspace_adapter.create_workspace(workspace_id)
 
         executor = ControlledCommandExecutor(
             workspace=workspace, registry=self.registry
@@ -66,20 +71,44 @@ class BaseCommandCapabilityHandler(BaseCapabilityHandler):
     allowed_params = [
         "workspace_id",
         "executable",
+        "command",
         "arguments",
         "timeout_seconds",
         "path_arguments",
         "test_suite",
+        "command_type",
     ]
 
     def __init__(self, adapter: DevCommandExecutorAdapter) -> None:
         self.adapter = adapter
 
+    def validate_parameters(self, inputs: Dict[str, Any]) -> Optional[str]:
+        if "workspace_id" not in inputs or not inputs["workspace_id"]:
+            inputs["workspace_id"] = "default"
+        if "executable" not in inputs and "command" in inputs:
+            inputs["executable"] = inputs["command"]
+        if "executable" not in inputs or not inputs["executable"]:
+            if self.command_type == CommandType.TEST:
+                inputs["executable"] = "pytest"
+            elif self.command_type == CommandType.BUILD:
+                inputs["executable"] = "python"
+            else:
+                inputs["executable"] = "python"
+        return super().validate_parameters(inputs)
+
     def execute(
         self, request: DelegationRequest, specialist: SpecialistMetadata
     ) -> CapabilityHandlerOutput:
-        ws_id = str(request.inputs.get("workspace_id", ""))
-        executable = str(request.inputs.get("executable", ""))
+        ws_id = str(request.inputs.get("workspace_id", "default") or "default")
+        executable = str(request.inputs.get("executable", request.inputs.get("command", "")))
+        if not executable:
+            if self.command_type == CommandType.TEST:
+                executable = "pytest"
+            elif self.command_type == CommandType.BUILD:
+                executable = "python"
+            else:
+                executable = "python"
+
         arguments = request.inputs.get("arguments", [])
         if isinstance(arguments, str):
             arguments = arguments.split()

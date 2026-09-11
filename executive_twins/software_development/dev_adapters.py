@@ -45,15 +45,23 @@ from executive_twins.git.dev_adapters import (
     GitStatusCapabilityHandler,
     GitUnstageCapabilityHandler,
 )
+from executive_twins.files.interfaces import IFileService
 from executive_twins.schemas.common import FactItem, FactState, SpecialistStatus
 from executive_twins.schemas.delegation import DelegationRequest
-from executive_twins.schemas.evidence import EvidenceCategory, EvidenceSet
+from executive_twins.schemas.evidence import (
+    ArtifactEvidence,
+    EvidenceCategory,
+    EvidenceSet,
+    ExecutionLogEvidence,
+    VerificationEvidence,
+)
 from executive_twins.schemas.specialist import Capability, RegistryProvenance, SpecialistMetadata
 from executive_twins.software_development.interfaces import (
     IDevelopmentPlanner,
     ISoftwareDevelopmentAgent,
 )
 from executive_twins.software_development.models import (
+    DevelopmentFileSpec,
     DevelopmentPlan,
     DevelopmentPlanStatus,
     DevelopmentRequest,
@@ -90,6 +98,7 @@ def create_software_development_specialist(
         Capability(name="code_modification", description="Refactoring, updates, and bugfixes"),
         Capability(name="software_testing", description="Automated test suite execution and validation"),
         Capability(name="software_validation", description="Static analysis, linting, and type checking"),
+        Capability(name="project_validation", description="Controlled workspace project structure, file coherence, and semantic validation", required_tools=["file_service"]),
         # Underlying controlled capabilities
         Capability(name="file_create", description="Controlled workspace file creation", required_tools=["file_service"]),
         Capability(name="file_read", description="Controlled workspace file reading", required_tools=["file_service"]),
@@ -169,9 +178,32 @@ class DeterministicDevelopmentPlanner(IDevelopmentPlanner):
         else:
             steps = self._default_plan_generator(request)
 
+        task_lower = request.task.lower()
+        files: List[DevelopmentFileSpec] = []
+        validation_steps: List[str] = []
+        if "landing page" in task_lower or "website" in task_lower or "html" in task_lower or "responsive" in task_lower:
+            files = [
+                DevelopmentFileSpec(path="index.html", purpose="Responsive semantic HTML landing page structure and company content", is_required=True),
+                DevelopmentFileSpec(path="styles.css", purpose="Responsive CSS styling, layout, typography, and theme variables", is_required=True),
+                DevelopmentFileSpec(path="script.js", purpose="Client-side interaction, events, and dynamic DOM behavior", is_required=True),
+                DevelopmentFileSpec(path="README.md", purpose="Project documentation, file manifest, and local inspection instructions", is_required=True),
+            ]
+            validation_steps = [
+                "Verify index.html exists and contains valid HTML structure with company facts",
+                "Verify styles.css exists and is referenced by index.html",
+                "Verify script.js exists and is referenced by index.html",
+                "Verify README.md exists and contains project overview",
+                "Perform automated multi-file project coherence validation",
+            ]
+
         return DevelopmentPlan(
             plan_id=f"plan-{uuid.uuid4().hex[:8]}",
             request_id=request.request_id,
+            project_goal=request.task,
+            workspace_id=request.workspace_id,
+            files=files,
+            validation_steps=validation_steps,
+            success_criteria=request.success_criteria,
             steps=steps,
             current_step_index=0,
             status=DevelopmentPlanStatus.DRAFT,
@@ -193,7 +225,198 @@ class DeterministicDevelopmentPlanner(IDevelopmentPlanner):
         )
 
         # File creation / coding steps based on task keywords
-        if "fastapi" in task_lower or "backend" in task_lower or "api" in task_lower:
+        if "landing page" in task_lower or "website" in task_lower or "html" in task_lower or "responsive" in task_lower:
+            html_code = (
+                "<!DOCTYPE html>\n"
+                "<html lang=\"en\">\n"
+                "<head>\n"
+                "    <meta charset=\"UTF-8\">\n"
+                "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+                "    <title>NovaPulse Robotics - Autonomous Warehouse Solutions</title>\n"
+                "    <link rel=\"stylesheet\" href=\"styles.css\">\n"
+                "</head>\n"
+                "<body>\n"
+                "    <header class=\"hero-section\">\n"
+                "        <div class=\"container\">\n"
+                "            <h1>NovaPulse Robotics</h1>\n"
+                "            <p class=\"page-label\">Company Landing Page</p>\n"
+                "            <p class=\"tagline\">Autonomous warehouse robotics solutions for modern enterprise logistics.</p>\n"
+                "            <button id=\"cta-btn\" class=\"btn-primary\">Explore Fleet</button>\n"
+                "        </div>\n"
+                "    </header>\n"
+                "    <main class=\"main-content container\">\n"
+                "        <section class=\"products-section\">\n"
+                "            <h2>Core Products & Services</h2>\n"
+                "            <div class=\"grid-cards\">\n"
+                "                <div class=\"card\">\n"
+                "                    <h3>Fleet Orchestrator</h3>\n"
+                "                    <p>Real-time autonomous multi-robot task allocation and route optimization.</p>\n"
+                "                </div>\n"
+                "                <div class=\"card\">\n"
+                "                    <h3>Autonomous AMR-500</h3>\n"
+                "                    <p>Heavy payload autonomous mobile robot with sub-centimeter LiDAR navigation.</p>\n"
+                "                </div>\n"
+                "                <div class=\"card\">\n"
+                "                    <h3>Cloud Telemetry API</h3>\n"
+                "                    <p>High-throughput telemetry and predictive maintenance streaming platform.</p>\n"
+                "                </div>\n"
+                "            </div>\n"
+                "        </section>\n"
+                "        <section class=\"contact-section\">\n"
+                "            <h2>Contact Us</h2>\n"
+                "            <p>Email: <a href=\"mailto:contact@novapulse.io\">contact@novapulse.io</a></p>\n"
+                "        </section>\n"
+                "    </main>\n"
+                "    <script src=\"script.js\"></script>\n"
+                "</body>\n"
+                "</html>\n"
+            )
+            css_code = (
+                "/* NovaPulse Robotics - Responsive Landing Page Styles */\n"
+                ":root {\n"
+                "    --primary-color: #0284c7;\n"
+                "    --primary-hover: #0369a1;\n"
+                "    --bg-color: #0f172a;\n"
+                "    --surface-color: #1e293b;\n"
+                "    --text-main: #f8fafc;\n"
+                "    --text-muted: #94a3b8;\n"
+                "}\n\n"
+                "* {\n"
+                "    box-sizing: border-box;\n"
+                "    margin: 0;\n"
+                "    padding: 0;\n"
+                "}\n\n"
+                "body {\n"
+                "    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;\n"
+                "    background-color: var(--bg-color);\n"
+                "    color: var(--text-main);\n"
+                "    line-height: 1.6;\n"
+                "}\n\n"
+                ".container {\n"
+                "    max-width: 1200px;\n"
+                "    margin: 0 auto;\n"
+                "    padding: 2rem;\n"
+                "}\n\n"
+                ".hero-section {\n"
+                "    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);\n"
+                "    padding: 4rem 1rem;\n"
+                "    text-align: center;\n"
+                "    border-bottom: 1px solid #334155;\n"
+                "}\n\n"
+                ".hero-section h1 {\n"
+                "    font-size: 2.75rem;\n"
+                "    color: #38bdf8;\n"
+                "    margin-bottom: 1rem;\n"
+                "}\n\n"
+                ".tagline {\n"
+                "    font-size: 1.25rem;\n"
+                "    color: var(--text-muted);\n"
+                "    margin-bottom: 2rem;\n"
+                "}\n\n"
+                ".btn-primary {\n"
+                "    background-color: var(--primary-color);\n"
+                "    color: white;\n"
+                "    padding: 0.75rem 1.75rem;\n"
+                "    border: none;\n"
+                "    border-radius: 6px;\n"
+                "    font-size: 1rem;\n"
+                "    font-weight: 600;\n"
+                "    cursor: pointer;\n"
+                "    transition: background 0.2s ease;\n"
+                "}\n\n"
+                ".btn-primary:hover {\n"
+                "    background-color: var(--primary-hover);\n"
+                "}\n\n"
+                ".grid-cards {\n"
+                "    display: grid;\n"
+                "    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));\n"
+                "    gap: 1.5rem;\n"
+                "    margin-top: 1.5rem;\n"
+                "}\n\n"
+                ".card {\n"
+                "    background-color: var(--surface-color);\n"
+                "    border: 1px solid #334155;\n"
+                "    border-radius: 8px;\n"
+                "    padding: 1.5rem;\n"
+                "}\n\n"
+                ".card h3 {\n"
+                "    color: #38bdf8;\n"
+                "    margin-bottom: 0.5rem;\n"
+                "}\n\n"
+                "@media (max-width: 768px) {\n"
+                "    .hero-section h1 { font-size: 2rem; }\n"
+                "    .container { padding: 1rem; }\n"
+                "}\n"
+            )
+            js_code = (
+                "// NovaPulse Robotics - Interactive Landing Page Logic\n"
+                "document.addEventListener('DOMContentLoaded', () => {\n"
+                "    console.log('NovaPulse Robotics Landing Page Initialized.');\n"
+                "    const ctaBtn = document.getElementById('cta-btn');\n"
+                "    if (ctaBtn) {\n"
+                "        ctaBtn.addEventListener('click', () => {\n"
+                "            alert('Explore Fleet: Connecting to NovaPulse Fleet Orchestrator...');\n"
+                "        });\n"
+                "    }\n"
+                "});\n"
+            )
+            readme_code = (
+                "# NovaPulse Robotics - Company Landing Page\n\n"
+                "Autonomous warehouse robotics solutions landing page project.\n\n"
+                "## Project Files\n"
+                "- `index.html`: Responsive landing page HTML structure with semantic tags and company information.\n"
+                "- `styles.css`: Modern responsive styles with CSS variables, flex/grid layouts, and media queries.\n"
+                "- `script.js`: Interactive client-side JavaScript.\n"
+                "- `README.md`: Project documentation and file manifest.\n\n"
+                "## Local Inspection\n"
+                "Open `index.html` in any modern web browser to view the page.\n"
+            )
+
+            steps.append(
+                PlanStep(
+                    step_id="step-2-create-html",
+                    action=PlanStepAction.CREATE_FILE,
+                    description="Create semantic index.html landing page",
+                    inputs={"workspace_id": request.workspace_id, "relative_path": "index.html", "content": html_code, "overwrite": True},
+                )
+            )
+            steps.append(
+                PlanStep(
+                    step_id="step-3-create-css",
+                    action=PlanStepAction.CREATE_FILE,
+                    description="Create responsive stylesheet styles.css",
+                    inputs={"workspace_id": request.workspace_id, "relative_path": "styles.css", "content": css_code, "overwrite": True},
+                )
+            )
+            steps.append(
+                PlanStep(
+                    step_id="step-4-create-js",
+                    action=PlanStepAction.CREATE_FILE,
+                    description="Create client-side interaction logic script.js",
+                    inputs={"workspace_id": request.workspace_id, "relative_path": "script.js", "content": js_code, "overwrite": True},
+                )
+            )
+            steps.append(
+                PlanStep(
+                    step_id="step-5-create-readme",
+                    action=PlanStepAction.CREATE_FILE,
+                    description="Create project README.md documentation",
+                    inputs={"workspace_id": request.workspace_id, "relative_path": "README.md", "content": readme_code, "overwrite": True},
+                )
+            )
+            steps.append(
+                PlanStep(
+                    step_id="step-6-validate-project",
+                    action=PlanStepAction.VALIDATE_PROJECT,
+                    description="Perform controlled multi-file project validation",
+                    inputs={
+                        "workspace_id": request.workspace_id,
+                        "required_files": ["index.html", "styles.css", "script.js", "README.md"],
+                        "expected_keywords": ["NovaPulse Robotics"],
+                    },
+                )
+            )
+        elif "fastapi" in task_lower or "backend" in task_lower or "api" in task_lower:
             main_code = (
                 "from fastapi import FastAPI\n\n"
                 "app = FastAPI(title='Student Management System')\n\n"
@@ -287,6 +510,74 @@ class DeterministicDevelopmentPlanner(IDevelopmentPlanner):
                 diagnosis=f"Detected error in '{patch_path}'. Applying corrective source patch.",
                 suggested_fix_steps=[fix_step],
             )
+
+        # Check if validation failed due to missing files or broken references
+        if failed_step.action == PlanStepAction.VALIDATE_PROJECT:
+            fix_steps = []
+            out_lower = failure_output.lower()
+            if "styles.css" in out_lower and ("missing" in out_lower or "not found" in out_lower or "empty" in out_lower):
+                fix_steps.append(
+                    PlanStep(
+                        step_id=f"step-recovery-css-{uuid.uuid4().hex[:6]}",
+                        action=PlanStepAction.CREATE_FILE,
+                        description="Restore missing styles.css",
+                        inputs={
+                            "workspace_id": request.workspace_id,
+                            "relative_path": "styles.css",
+                            "content": "/* Recovered styles */\nbody { margin: 0; background: #0f172a; color: #fff; }\n",
+                            "overwrite": True,
+                        },
+                    )
+                )
+            if "script.js" in out_lower and ("missing" in out_lower or "not found" in out_lower or "empty" in out_lower):
+                fix_steps.append(
+                    PlanStep(
+                        step_id=f"step-recovery-js-{uuid.uuid4().hex[:6]}",
+                        action=PlanStepAction.CREATE_FILE,
+                        description="Restore missing script.js",
+                        inputs={
+                            "workspace_id": request.workspace_id,
+                            "relative_path": "script.js",
+                            "content": "// Recovered script\nconsole.log('Restored');\n",
+                            "overwrite": True,
+                        },
+                    )
+                )
+            if "readme.md" in out_lower and ("missing" in out_lower or "not found" in out_lower or "empty" in out_lower):
+                fix_steps.append(
+                    PlanStep(
+                        step_id=f"step-recovery-readme-{uuid.uuid4().hex[:6]}",
+                        action=PlanStepAction.CREATE_FILE,
+                        description="Restore missing README.md",
+                        inputs={
+                            "workspace_id": request.workspace_id,
+                            "relative_path": "README.md",
+                            "content": "# Recovered Project Documentation\n\nRecovered project overview.\n",
+                            "overwrite": True,
+                        },
+                    )
+                )
+            if "novapulse robotics" in out_lower and "missing" in out_lower:
+                fix_steps.append(
+                    PlanStep(
+                        step_id=f"step-recovery-html-{uuid.uuid4().hex[:6]}",
+                        action=PlanStepAction.CREATE_FILE,
+                        description="Inject required NovaPulse Robotics facts into index.html",
+                        inputs={
+                            "workspace_id": request.workspace_id,
+                            "relative_path": "index.html",
+                            "content": "<!DOCTYPE html><html><head><title>NovaPulse Robotics</title><link rel=\"stylesheet\" href=\"styles.css\"></head><body><h1>NovaPulse Robotics</h1><script src=\"script.js\"></script></body></html>",
+                            "overwrite": True,
+                        },
+                    )
+                )
+
+            if fix_steps:
+                return DiagnosticResult(
+                    can_recover=True,
+                    diagnosis=f"Diagnosed project validation failure. Created {len(fix_steps)} corrective recovery step(s).",
+                    suggested_fix_steps=fix_steps,
+                )
 
         # Default fallback: if test failed and contains syntax/assertion error
         if failed_step.action == PlanStepAction.RUN_TEST:
@@ -383,6 +674,207 @@ class SoftwareDevelopmentCapabilityHandler(BaseCapabilityHandler):
         )
 
 
+class ProjectValidationCapabilityHandler(BaseCapabilityHandler):
+    """
+    Authoritative Capability Handler for 'project_validation'.
+    Performs deterministic, bounded semantic and structural validation of multi-file projects
+    strictly via IFileService (no raw OS filesystem calls or arbitrary shell commands).
+    """
+
+    capability_name = "project_validation"
+    required_tool = "file_service"
+    required_params = ["workspace_id"]
+    allowed_params = [
+        "workspace_id",
+        "relative_path",
+        "path",
+        "required_files",
+        "expected_keywords",
+        "check_cross_references",
+        "task",
+    ]
+
+    def __init__(self, file_service: IFileService) -> None:
+        self.file_service = file_service
+
+    def execute(
+        self, request: DelegationRequest, specialist: SpecialistMetadata
+    ) -> CapabilityHandlerOutput:
+        workspace_id = str(request.inputs.get("workspace_id", "default"))
+        task_str = str(request.inputs.get("task", request.task or "")).lower()
+
+        # Determine required files based on inputs or task context
+        explicit_required = request.inputs.get("required_files")
+        if isinstance(explicit_required, list) and explicit_required:
+            required_files = [str(f) for f in explicit_required]
+        elif "landing page" in task_str or "website" in task_str or "html" in task_str or "responsive" in task_str:
+            required_files = ["index.html", "styles.css", "script.js", "README.md"]
+        else:
+            path_param = request.inputs.get("relative_path") or request.inputs.get("path")
+            if path_param:
+                required_files = [str(path_param)]
+            else:
+                required_files = ["index.html", "styles.css", "script.js", "README.md"]
+
+        expected_keywords = request.inputs.get("expected_keywords", ["NovaPulse Robotics"])
+        if not isinstance(expected_keywords, list):
+            expected_keywords = [str(expected_keywords)]
+
+        errors: List[str] = []
+        validated_artifacts: List[str] = []
+        evidence_items: List[Any] = []
+        facts: List[FactItem] = []
+        file_contents: Dict[str, str] = {}
+
+        if hasattr(self.file_service, "get_file_service"):
+            svc = self.file_service.get_file_service(workspace_id)
+        else:
+            svc = self.file_service
+
+        if not svc:
+            return CapabilityHandlerOutput(
+                success=False,
+                output_text=f"VALIDATION_FAILED: File service for workspace '{workspace_id}' not found.",
+                errors=[f"File service for workspace '{workspace_id}' not found."],
+            )
+
+        # 1. Existence and non-empty checks for all required files
+        for rel_file in required_files:
+            read_res = svc.read_file(rel_file)
+            if not read_res.success:
+                errors.append(f"Missing required file: '{rel_file}' ({read_res.error_message or 'File not found'})")
+                continue
+
+            content = read_res.content or ""
+            if len(content.strip()) == 0:
+                errors.append(f"Required file '{rel_file}' is empty.")
+                continue
+
+            file_contents[rel_file] = content
+            validated_artifacts.append(rel_file)
+
+            mime = (
+                "text/html"
+                if rel_file.endswith(".html")
+                else "text/css"
+                if rel_file.endswith(".css")
+                else "application/javascript"
+                if rel_file.endswith(".js")
+                else "text/markdown"
+                if rel_file.endswith(".md")
+                else "text/plain"
+            )
+            size_b = read_res.metadata.size_bytes if read_res.metadata else len(content.encode('utf-8'))
+            checksum = read_res.metadata.checksum_sha256 if read_res.metadata else None
+            evidence_items.append(
+                ArtifactEvidence(
+                    evidence_id=f"ev_art_val_{uuid.uuid4().hex[:8]}",
+                    artifact_uri=f"workspace://{workspace_id}/{rel_file}",
+                    mime_type=mime,
+                    checksum_sha256=checksum,
+                    description=f"Validated project artifact: {rel_file} ({size_b} bytes)",
+                )
+            )
+
+        # 2. Semantic structure & cross-reference validation for index.html
+        if "index.html" in file_contents:
+            html_content = file_contents["index.html"]
+            html_lower = html_content.lower()
+
+            if "<!doctype html>" not in html_lower and "<html" not in html_lower:
+                errors.append("index.html lacks valid HTML document structure (missing DOCTYPE or <html>).")
+            if "<body" not in html_lower or "</body>" not in html_lower:
+                errors.append("index.html lacks <body> tag structure.")
+
+            if "styles.css" in required_files or "styles.css" in file_contents:
+                if "styles.css" not in html_content:
+                    errors.append("index.html does not link to 'styles.css' (missing <link rel=\"stylesheet\" href=\"styles.css\">).")
+
+            if "script.js" in required_files or "script.js" in file_contents:
+                if "script.js" not in html_content:
+                    errors.append("index.html does not reference 'script.js' (missing <script src=\"script.js\"></script>).")
+
+            for kw in expected_keywords:
+                if kw.lower() not in html_lower:
+                    errors.append(f"index.html is missing required company fact/keyword: '{kw}'.")
+
+        # 3. CSS syntax/rules check for styles.css
+        if "styles.css" in file_contents:
+            css_content = file_contents["styles.css"]
+            if "{" not in css_content or "}" not in css_content:
+                errors.append("styles.css does not contain valid CSS rules/declarations.")
+
+        # 4. JS syntax/behavior check for script.js
+        if "script.js" in file_contents:
+            js_content = file_contents["script.js"]
+            if len(js_content.strip()) < 10:
+                errors.append("script.js content is too short to be functional.")
+
+        # 5. README check
+        if "README.md" in file_contents:
+            readme_content = file_contents["README.md"]
+            if len(readme_content.strip()) < 20:
+                errors.append("README.md does not contain adequate project documentation.")
+
+        # Aggregate Result
+        if errors:
+            failure_msg = f"Project validation failed with {len(errors)} error(s): " + "; ".join(errors)
+            evidence_items.append(
+                ExecutionLogEvidence(
+                    evidence_id=f"ev_log_val_{uuid.uuid4().hex[:8]}",
+                    execution_id=request.delegation_id,
+                    log_snippet=failure_msg,
+                    exit_code=1,
+                    description="Project validation failure log",
+                )
+            )
+            return CapabilityHandlerOutput(
+                success=False,
+                output_text=failure_msg,
+                facts=facts,
+                artifacts=validated_artifacts,
+                errors=errors,
+                additional_evidence=evidence_items,
+            )
+
+        # Success Output
+        success_msg = (
+            f"Project validation passed successfully for workspace '{workspace_id}'. "
+            f"Validated {len(validated_artifacts)} files ({', '.join(validated_artifacts)}). "
+            f"All cross-references and required company information verified."
+        )
+
+        facts.append(
+            FactItem(
+                statement=f"Project validation passed for workspace '{workspace_id}': all required files verified.",
+                state=FactState.FACT,
+                source="project_validation_handler",
+            )
+        )
+
+        verif_ev = VerificationEvidence(
+            evidence_id=f"ev_verif_val_{uuid.uuid4().hex[:8]}",
+            verifier_id="ProjectValidationCapabilityHandler",
+            verified_status="VERIFIED",
+            description=success_msg,
+        )
+        evidence_items.append(verif_ev)
+
+        return CapabilityHandlerOutput(
+            success=True,
+            output_text=success_msg,
+            facts=facts,
+            artifacts=validated_artifacts,
+            errors=[],
+            additional_evidence=evidence_items,
+        )
+
+
+class SoftwareValidationCapabilityHandler(ProjectValidationCapabilityHandler):
+    """Alias handler registered for 'software_validation'."""
+    capability_name = "software_validation"
+
+
 class DevTestSoftwareDevelopmentAdapter:
     """
     DEV_TEST_ONLY_ADAPTER: Sets up an integrated software development test environment
@@ -412,6 +904,10 @@ class DevTestSoftwareDevelopmentAdapter:
         engine.register_handler(FileDeleteCapabilityHandler(self.file_adapter))
         engine.register_handler(FileListCapabilityHandler(self.file_adapter))
 
+        # Project / Software Validation
+        engine.register_handler(ProjectValidationCapabilityHandler(self.file_adapter))
+        engine.register_handler(SoftwareValidationCapabilityHandler(self.file_adapter))
+
         # Command Execution
         engine.register_handler(BuildCapabilityHandler(self.command_adapter))
         engine.register_handler(TestCapabilityHandler(self.command_adapter))
@@ -437,3 +933,4 @@ class DevTestSoftwareDevelopmentAdapter:
         engine.register_handler(DockerInspectCapabilityHandler(self.docker_adapter))
         engine.register_handler(DockerStopCapabilityHandler(self.docker_adapter))
         engine.register_handler(DockerRemoveCapabilityHandler(self.docker_adapter))
+

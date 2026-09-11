@@ -87,6 +87,7 @@ class SoftwareDevelopmentAgent(ISoftwareDevelopmentAgent):
         PlanStepAction.RUN_LINT: "lint_command_execution",
         PlanStepAction.RUN_TYPECHECK: "typecheck_command_execution",
         PlanStepAction.WORKSPACE_BUILD: "workspace_build",
+        PlanStepAction.VALIDATE_PROJECT: "project_validation",
         PlanStepAction.GIT_STATUS: "git_status",
         PlanStepAction.GIT_DIFF: "git_diff",
         PlanStepAction.GIT_STAGE: "git_stage",

@@ -110,19 +110,19 @@ export class LiveRunSimulator {
     // 1. Stage 0: PERCEPTION
     this.updateStage(0, 'RUNNING', 'Parsing requirement and normalizing intent...');
     this.emitUpdate();
-    await this.delay(700);
+    await this.delay(1500);
     if (this.isCancelled) return;
 
     if (type === 'STRATEGIC_TWIN') {
       this.run.executiveTwinActivated = mockExecutiveTwins[3]; // CMO
-      this.updateStage(0, 'COMPLETED', 'Marketing launch requirement identified. Strategic Twin required.', 700);
+      this.updateStage(0, 'COMPLETED', 'Marketing launch requirement identified. Strategic Twin required.', 1500);
       this.addAuditEvent('PERCEPTION_COMPLETED', {
         identifiedIntent: 'MARKETING_LAUNCH',
         requiresExecutiveTwin: true,
         twinRole: 'CMO',
       });
     } else {
-      this.updateStage(0, 'COMPLETED', 'Goal parsed: Landing page synthesis using approved facts.', 700);
+      this.updateStage(0, 'COMPLETED', 'Goal parsed: Landing page synthesis using approved facts.', 1500);
       this.addAuditEvent('PERCEPTION_COMPLETED', {
         identifiedIntent: 'SOFTWARE_WEB_SYNTHESIS',
         requiresExecutiveTwin: false,
@@ -134,11 +134,11 @@ export class LiveRunSimulator {
     this.run.status = 'PLANNING';
     this.updateStage(1, 'RUNNING', 'Querying Company Obsidian vault for authoritative profile...');
     this.emitUpdate();
-    await this.delay(800);
+    await this.delay(1500);
     if (this.isCancelled) return;
 
     this.run.knowledgeRetrieved = [mockObsidianKnowledge[0], mockObsidianKnowledge[1]];
-    this.updateStage(1, 'COMPLETED', 'Retrieved 5 verified facts from authoritative Obsidian vault.', 800);
+    this.updateStage(1, 'COMPLETED', 'Retrieved 5 verified facts from authoritative Obsidian vault.', 1500);
     this.addAuditEvent('KNOWLEDGE_RETRIEVED', {
       source: 'Company Obsidian',
       vaultPath: 'company_knowledge/default/company_profile.md',
@@ -150,7 +150,7 @@ export class LiveRunSimulator {
     // 3. Stage 2: REASONING (No CoT exposed!)
     this.updateStage(2, 'RUNNING', 'Synthesizing structured declarative plan...');
     this.emitUpdate();
-    await this.delay(900);
+    await this.delay(1600);
     if (this.isCancelled) return;
 
     const plan: ReasoningPlan = {
@@ -263,10 +263,10 @@ export class LiveRunSimulator {
     this.run.status = 'VALIDATING';
     this.updateStage(3, 'RUNNING', 'Validating plan schema, security boundaries & capabilities...');
     this.emitUpdate();
-    await this.delay(600);
+    await this.delay(1400);
     if (this.isCancelled) return;
 
-    this.updateStage(3, 'COMPLETED', 'Plan validated against StrictBoundsValidator (0 cycles, bounds ok).', 600);
+    this.updateStage(3, 'COMPLETED', 'Plan validated against StrictBoundsValidator (0 cycles, bounds ok).', 1400);
     this.addAuditEvent('PLAN_VALIDATED', { status: 'PASSED', boundsChecked: true });
     this.emitUpdate();
 
@@ -274,7 +274,7 @@ export class LiveRunSimulator {
     this.run.status = 'SELECTING_CAPABILITIES';
     this.updateStage(4, 'RUNNING', 'Querying specialist registry for required capabilities...');
     this.emitUpdate();
-    await this.delay(650);
+    await this.delay(1400);
     if (this.isCancelled) return;
 
     this.run.selectedSpecialists = {
@@ -283,7 +283,7 @@ export class LiveRunSimulator {
       file_operations: 'spec_software_dev_01',
       build_validation: 'spec_build_test_01',
     };
-    this.updateStage(4, 'COMPLETED', 'Registry matched 4 active specialists for capabilities.', 650);
+    this.updateStage(4, 'COMPLETED', 'Registry matched 4 active specialists for capabilities.', 1400);
     this.addAuditEvent('CAPABILITY_SELECTED', {
       matches: this.run.selectedSpecialists,
       registryStatus: 'ACTIVE',
@@ -293,10 +293,10 @@ export class LiveRunSimulator {
     // 6. Stage 5: SPECIALIST DELEGATION
     this.updateStage(5, 'RUNNING', 'Delegating subtasks to specialist execution engines...');
     this.emitUpdate();
-    await this.delay(600);
+    await this.delay(1500);
     if (this.isCancelled) return;
 
-    this.updateStage(5, 'COMPLETED', 'Subtasks delegated. SecurityGuard boundaries verified.', 600);
+    this.updateStage(5, 'COMPLETED', 'Subtasks delegated. SecurityGuard boundaries verified.', 1500);
     this.addAuditEvent('SPECIALIST_DELEGATED', {
       delegates: ['spec_web_dev_01', 'spec_software_dev_01', 'spec_build_test_01'],
       securityGuardActive: true,
@@ -305,14 +305,15 @@ export class LiveRunSimulator {
 
     // 7. Stage 6: CONTROLLED EXECUTION
     this.run.status = 'EXECUTING';
-    this.updateStage(6, 'RUNNING', 'Executing sandboxed file operations via SecurityGuard...');
+    this.updateStage(6, 'RUNNING', 'Software Development Specialist executing sandboxed workspace files...');
     this.emitUpdate();
 
     if (type === 'CONTROLLED_FAILURE') {
-      // Simulate Controlled Failure & Recovery Demo Flow
-      await this.delay(1000);
+      // 1. Let Software Development Specialist work in ACTIVE state first
+      await this.delay(1600);
       if (this.isCancelled) return;
 
+      // 2. ONLY NOW does the failure occur on the active specialist
       this.run.validations.push({
         operation: 'BUILD',
         command: 'npm run build',
@@ -321,20 +322,17 @@ export class LiveRunSimulator {
         output: 'ERROR: Path traversal violation detected: attempted write outside sandbox root ("../../../etc/hosts").',
         restrictedShell: true,
       });
-      this.updateStage(6, 'FAILED', 'Build validation failed: Path traversal blocked by SecurityGuard.', 1000);
+      this.updateStage(6, 'FAILED', 'Build validation failed: Path traversal blocked by SecurityGuard.', 1600);
       this.addAuditEvent('EXECUTION_FAILED', {
         error: 'SecurityGuard blocked path traversal attempt',
         exitCode: 1,
       });
       this.emitUpdate();
-
-      // RECOVERY SUB-FLOW
-      this.run.status = 'RECOVERING';
-      this.updateStage(6, 'RECOVERING', 'Observation recorded failure evidence. Diagnosing root cause...');
-      this.emitUpdate();
-      await this.delay(1200);
+      await this.delay(1000);
       if (this.isCancelled) return;
 
+      // 3. Autonomous Recovery Sub-Sequence starts
+      this.run.status = 'RECOVERING';
       const recoveryEvent: RecoveryEvent = {
         attempt: 1,
         maxAttempts: 3,
@@ -344,33 +342,79 @@ export class LiveRunSimulator {
         replannedGoal: 'Synthesize files strictly inside workspace sandbox',
         replanStepCount: 3,
         status: 'IN_PROGRESS',
+        activeStep: 'FAILURE',
       };
-      this.run.recoveryHistory.push(recoveryEvent);
-      this.addAuditEvent('RECOVERY_STARTED', { attempt: 1, maxAttempts: 3 });
-      this.addAuditEvent('REPLAN_GENERATED', { diagnosis: recoveryEvent.diagnosis });
+      this.run.recoveryHistory = [recoveryEvent];
+      this.updateStage(6, 'RECOVERING', 'Execution failed. Initializing autonomous recovery...');
       this.emitUpdate();
-
-      // Retry execution with corrected plan
-      this.run.status = 'REPLANNING';
-      await this.delay(1000);
+      await this.delay(1400);
       if (this.isCancelled) return;
 
+      // 4. Observation / QA
+      recoveryEvent.activeStep = 'OBSERVATION';
+      this.updateStage(6, 'RECOVERING', 'Observation recorded failure evidence in evidence vault...');
+      this.emitUpdate();
+      await this.delay(1400);
+      if (this.isCancelled) return;
+
+      // 5. Diagnosis
+      recoveryEvent.activeStep = 'DIAGNOSIS';
+      this.updateStage(6, 'RECOVERING', 'Reasoning diagnosed root cause: Unbounded path in DAG step...');
+      this.emitUpdate();
+      await this.delay(1400);
+      if (this.isCancelled) return;
+
+      // 6. Reflection
+      recoveryEvent.activeStep = 'REFLECTION';
+      this.updateStage(6, 'RECOVERING', 'Evaluating recovery strategy within attempt 1 of 3...');
+      this.emitUpdate();
+      await this.delay(1400);
+      if (this.isCancelled) return;
+
+      // 7. Re-Plan
+      recoveryEvent.activeStep = 'REPLAN';
+      this.updateStage(6, 'RECOVERING', 'Re-planning: Generated corrected bounded DAG step...');
+      this.emitUpdate();
+      await this.delay(1400);
+      if (this.isCancelled) return;
+
+      // 8. Specialist Retry - Border returns to Software Development Specialist
+      recoveryEvent.activeStep = 'RETRY';
       this.run.status = 'EXECUTING';
-      this.updateStage(6, 'RUNNING', 'Retrying execution with corrected bounded plan (Attempt 1/3)...');
+      this.updateStage(6, 'RUNNING', 'Software Development Specialist retrying with corrected plan (Attempt 1/3)...');
       this.emitUpdate();
-      await this.delay(1200);
+      await this.delay(1800);
       if (this.isCancelled) return;
 
+      // 9. Validation
+      recoveryEvent.activeStep = 'VALIDATION';
+      this.updateStage(6, 'RUNNING', 'Running build and project coherence validation in sandbox...');
+      this.emitUpdate();
+      await this.delay(1400);
+      if (this.isCancelled) return;
+
+      // 10. Verification
+      recoveryEvent.activeStep = 'VERIFICATION';
+      this.updateStage(6, 'RUNNING', 'Verifying recovered outputs against success criteria...');
+      this.emitUpdate();
+      await this.delay(1400);
+      if (this.isCancelled) return;
+
+      // 11. Specialist completes work
+      recoveryEvent.activeStep = 'COMPLETED';
       recoveryEvent.status = 'RECOVERED';
       this.populateSuccessFiles();
-      this.updateStage(6, 'COMPLETED', 'Execution recovered and completed successfully on Retry 1.', 1200);
+      this.updateStage(6, 'COMPLETED', 'Software Development Specialist completed successfully after recovery.', 1800);
       this.emitUpdate();
+      await this.delay(1000);
+      if (this.isCancelled) return;
     } else if (type === 'BOUNDED_FAILURE') {
+      // 1. Let specialist work first before failure occurs
+      await this.delay(1500);
+      if (this.isCancelled) return;
+
       // Simulate Repeated Bounded Failure Exhaustion
       for (let attempt = 1; attempt <= 3; attempt++) {
-        await this.delay(900);
-        if (this.isCancelled) return;
-
         this.run.validations.push({
           operation: 'TEST',
           command: `probe-network-endpoint --attempt=${attempt}`,
@@ -389,14 +433,19 @@ export class LiveRunSimulator {
           replannedGoal: 'Retry endpoint probe with fallback adapter',
           replanStepCount: 1,
           status: attempt < 3 ? 'IN_PROGRESS' : 'EXHAUSTED',
+          activeStep: attempt < 3 ? 'RETRY' : 'VERIFICATION',
         };
-        this.run.recoveryHistory.push(recEv);
+        this.run.recoveryHistory = [...this.run.recoveryHistory, recEv];
+        this.run.status = 'RECOVERING';
+        this.updateStage(6, 'RECOVERING', `Attempt ${attempt}/3 failed. Re-planning fallback adapter...`);
         this.addAuditEvent('RECOVERY_STARTED', { attempt, maxAttempts: 3 });
         this.emitUpdate();
+        await this.delay(1500);
+        if (this.isCancelled) return;
       }
 
       this.run.status = 'FAILED';
-      this.updateStage(6, 'FAILED', 'Maximum recovery attempts reached (3/3). Bounded termination enforced.', 2700);
+      this.updateStage(6, 'FAILED', 'Maximum recovery attempts reached (3/3). Bounded termination enforced.', 3600);
       this.updateStage(7, 'SKIPPED', 'Observation skipped due to unrecovered failure.');
       this.updateStage(8, 'BLOCKED', 'Verification blocked.');
       this.updateStage(9, 'SKIPPED', 'Memory writeback blocked — unverified state protected.');
@@ -414,11 +463,11 @@ export class LiveRunSimulator {
       return;
     } else {
       // STANDARD / STRATEGIC_TWIN
-      await this.delay(1200);
+      await this.delay(1800);
       if (this.isCancelled) return;
 
       this.populateSuccessFiles();
-      this.updateStage(6, 'COMPLETED', 'Created 4 project files and validated build in sandbox.', 1200);
+      this.updateStage(6, 'COMPLETED', 'Created 4 project files and validated build in sandbox.', 1800);
       this.addAuditEvent('EXECUTION_COMPLETED', { filesCreated: 4, workspace: 'run-001' });
       this.emitUpdate();
     }
@@ -427,7 +476,7 @@ export class LiveRunSimulator {
     this.run.status = 'OBSERVING';
     this.updateStage(7, 'RUNNING', 'Collecting empirical evidence, test reports, and artifact checksums...');
     this.emitUpdate();
-    await this.delay(800);
+    await this.delay(1500);
     if (this.isCancelled) return;
 
     this.run.evidenceItems = [
@@ -453,7 +502,7 @@ export class LiveRunSimulator {
         description: 'All 7 acceptance criteria empirically validated',
       },
     ];
-    this.updateStage(7, 'COMPLETED', '3 empirical evidence items captured (Artifact, Test, Verification).', 800);
+    this.updateStage(7, 'COMPLETED', '3 empirical evidence items captured (Artifact, Test, Verification).', 1500);
     this.addAuditEvent('OBSERVATION_RECORDED', { evidenceCount: 3 });
     this.emitUpdate();
 
@@ -461,7 +510,7 @@ export class LiveRunSimulator {
     this.run.status = 'VERIFYING';
     this.updateStage(8, 'RUNNING', 'Evaluating success criteria checklist against evidence...');
     this.emitUpdate();
-    await this.delay(750);
+    await this.delay(1500);
     if (this.isCancelled) return;
 
     this.run.verificationChecklist = [
@@ -473,14 +522,14 @@ export class LiveRunSimulator {
       { criterion: 'Empirical evidence recorded', passed: true, details: 'Hashes logged' },
       { criterion: 'Approved completion recorded in Obsidian memory', passed: true, details: 'Approval verified' },
     ];
-    this.updateStage(8, 'COMPLETED', 'Verification PASSED (7/7 criteria verified).', 750);
+    this.updateStage(8, 'COMPLETED', 'Verification PASSED (7/7 criteria verified).', 1500);
     this.addAuditEvent('VERIFICATION_COMPLETED', { status: 'VERIFIED', criteriaCount: 7 });
     this.emitUpdate();
 
     // 10. Stage 9: MEMORY WRITEBACK
     this.updateStage(9, 'RUNNING', 'Persisting verified outcome to authoritative Company Obsidian...');
     this.emitUpdate();
-    await this.delay(700);
+    await this.delay(1500);
     if (this.isCancelled) return;
 
     this.run.memoryWriteback = {
@@ -495,7 +544,7 @@ export class LiveRunSimulator {
       ],
       timestamp: new Date().toISOString(),
     };
-    this.updateStage(9, 'COMPLETED', 'Writeback complete: state recorded to Company Obsidian vault.', 700);
+    this.updateStage(9, 'COMPLETED', 'Writeback complete: state recorded to Company Obsidian vault.', 1500);
     this.addAuditEvent('MEMORY_WRITEBACK_COMPLETED', {
       vaultPath: this.run.memoryWriteback.targetVaultPath,
       status: 'APPROVED',

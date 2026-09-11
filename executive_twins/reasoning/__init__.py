@@ -7,6 +7,7 @@ from executive_twins.reasoning.dev_adapters import (
     DevTestReasoningAdapter,
     LocalInferenceReasoningAdapter,
 )
+from executive_twins.reasoning.ollama_adapter import OllamaReasoningAdapter
 from executive_twins.reasoning.interfaces import (
     IPlanTranslator,
     IReasoningModel,
@@ -47,6 +48,7 @@ __all__ = [
     "ReasoningValidator",
     "DevTestReasoningAdapter",
     "LocalInferenceReasoningAdapter",
+    "OllamaReasoningAdapter",
     "ReasoningService",
     "PlanTranslator",
 ]
